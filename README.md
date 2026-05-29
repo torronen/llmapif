@@ -120,6 +120,26 @@ npm run build
 node server/dist/index.js     # server + dashboard both served on :3001
 ```
 
+### Access control
+
+The proxy is local-first. The admin API (`/api/*`) and dashboard are protected by **two layers**:
+
+- **Loopback binding** — the server binds to `127.0.0.1` by default, so only the local machine can reach it. Set `BIND_HOST=0.0.0.0` to listen on all interfaces.
+- **Admin password (optional)** — set `ADMIN_PASSWORD` and the dashboard requires a login; every `/api/*` call then needs a session token. Leave it unset to keep the original unauthenticated-but-loopback-only behaviour.
+
+To expose the admin API beyond loopback you must set a password: `ADMIN_ALLOW_REMOTE=true` without `ADMIN_PASSWORD` makes the server refuse to start. The `/v1` proxy endpoint is always gated by the unified API key, independent of the above.
+
+### Docker
+
+```bash
+# Generate an encryption key and a strong admin password, then:
+ENCRYPTION_KEY=$(node -e "console.log(require('crypto').randomBytes(32).toString('hex'))") \
+ADMIN_PASSWORD='choose-a-long-passphrase' \
+docker compose up --build
+```
+
+The image binds to `0.0.0.0` and enables remote admin access, so `ADMIN_PASSWORD` (and `ENCRYPTION_KEY`) are mandatory — compose refuses to start without them. The SQLite database persists in the `llmapif-data` volume (`DATABASE_PATH=/data/freeapi.db`).
+
 ## Using the API
 
 Any OpenAI-compatible client works. Examples:

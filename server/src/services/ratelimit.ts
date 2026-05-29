@@ -38,6 +38,17 @@ function withDb<T>(fn: (db: RateLimitDb) => T): T | undefined {
   }
 }
 
+// Old rows are pruned at most once per PRUNE_INTERVAL_MS rather than on every
+// insert: the cleanup DELETE filters on created_at_ms alone, which the composite
+// lookup index can't serve, so running it per-request meant a full table scan on
+// the hot path. Throttling keeps the table bounded without that cost.
+let lastPruneMs = 0;
+const PRUNE_INTERVAL_MS = MINUTE;
+
+// Returns true if the usage row was persisted to SQLite. Callers use the result
+// to decide whether to maintain the in-memory fallback windows — when the DB is
+// healthy we skip them entirely (the read path prefers persisted counts), which
+// avoids unbounded growth of the in-memory timestamp arrays.
 function recordUsage(
   platform: string,
   modelId: string,
@@ -45,14 +56,18 @@ function recordUsage(
   kind: UsageKind,
   tokens: number,
   now: number,
-) {
-  withDb(db => {
+): boolean {
+  return withDb(db => {
     db.prepare(`
       INSERT INTO rate_limit_usage (platform, model_id, key_id, kind, tokens, created_at_ms)
       VALUES (?, ?, ?, ?, ?, ?)
     `).run(platform, modelId, keyId, kind, tokens, now);
-    db.prepare('DELETE FROM rate_limit_usage WHERE created_at_ms <= ?').run(now - DAY);
-  });
+    if (now - lastPruneMs > PRUNE_INTERVAL_MS) {
+      db.prepare('DELETE FROM rate_limit_usage WHERE created_at_ms <= ?').run(now - DAY);
+      lastPruneMs = now;
+    }
+    return true;
+  }) === true;
 }
 
 function countPersistedRequests(
@@ -179,13 +194,12 @@ export function canUseTokens(
 export function recordRequest(platform: string, modelId: string, keyId: number) {
   const now = Date.now();
 
-  const rpmKey = `${platform}:${modelId}:${keyId}:rpm`;
-  getWindow(rpmKey).timestamps.push(now);
+  const persisted = recordUsage(platform, modelId, keyId, 'request', 0, now);
+  if (persisted) return;
 
-  const rpdKey = `${platform}:${modelId}:${keyId}:rpd`;
-  getWindow(rpdKey).timestamps.push(now);
-
-  recordUsage(platform, modelId, keyId, 'request', 0, now);
+  // Degraded mode (DB unavailable): track in memory so rate limits still apply.
+  getWindow(`${platform}:${modelId}:${keyId}:rpm`).timestamps.push(now);
+  getWindow(`${platform}:${modelId}:${keyId}:rpd`).timestamps.push(now);
 }
 
 export function recordTokens(
@@ -196,13 +210,12 @@ export function recordTokens(
 ) {
   const now = Date.now();
 
-  const tpmKey = `${platform}:${modelId}:${keyId}:tpm`;
-  getWindow(tpmKey).tokenTimestamps.push({ ts: now, tokens });
+  const persisted = recordUsage(platform, modelId, keyId, 'tokens', tokens, now);
+  if (persisted) return;
 
-  const tpdKey = `${platform}:${modelId}:${keyId}:tpd`;
-  getWindow(tpdKey).tokenTimestamps.push({ ts: now, tokens });
-
-  recordUsage(platform, modelId, keyId, 'tokens', tokens, now);
+  // Degraded mode (DB unavailable): track in memory so token limits still apply.
+  getWindow(`${platform}:${modelId}:${keyId}:tpm`).tokenTimestamps.push({ ts: now, tokens });
+  getWindow(`${platform}:${modelId}:${keyId}:tpd`).tokenTimestamps.push({ ts: now, tokens });
 }
 
 // Cooldown: when a provider returns 429, block that model+key for a period

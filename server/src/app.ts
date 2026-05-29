@@ -10,7 +10,10 @@ import { fallbackRouter } from './routes/fallback.js';
 import { analyticsRouter } from './routes/analytics.js';
 import { healthRouter } from './routes/health.js';
 import { settingsRouter } from './routes/settings.js';
+import { authRouter } from './routes/auth.js';
 import { errorHandler } from './middleware/errorHandler.js';
+import { localOnly } from './middleware/localOnly.js';
+import { requireAdmin } from './middleware/requireAdmin.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -47,7 +50,22 @@ export function createApp() {
   }));
   app.use(express.json({ limit: '1mb' }));
 
-  // API routes
+  // Admin API. Two layers of protection (both no-ops only for the exempt
+  // endpoints below): a loopback-only guard (override with ADMIN_ALLOW_REMOTE=
+  // true) and, when ADMIN_PASSWORD is set, an admin session token. The /v1
+  // proxy is intentionally gated by neither — it has its own unified-key auth.
+  app.use('/api', localOnly);
+
+  // Exempt from the admin-token guard: the health ping and the auth endpoints
+  // (you can't require a token to obtain one). Still behind localOnly above.
+  app.get('/api/ping', (_req, res) => {
+    res.json({ status: 'ok', timestamp: new Date().toISOString() });
+  });
+  app.use('/api/auth', authRouter);
+
+  // Everything else under /api requires a valid admin token (no-op when
+  // ADMIN_PASSWORD is unset).
+  app.use('/api', requireAdmin);
   app.use('/api/keys', keysRouter);
   app.use('/api/models', modelsRouter);
   app.use('/api/fallback', fallbackRouter);
@@ -57,11 +75,6 @@ export function createApp() {
 
   // OpenAI-compatible proxy
   app.use('/v1', proxyRouter);
-
-  // Health check
-  app.get('/api/ping', (_req, res) => {
-    res.json({ status: 'ok', timestamp: new Date().toISOString() });
-  });
 
   // Error handler (for API routes)
   app.use(errorHandler);

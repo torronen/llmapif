@@ -99,6 +99,7 @@ export function decrypt(encrypted: string, iv: string, authTag: string): string 
 }
 
 export function maskKey(key: string): string {
-  if (key.length <= 8) return '****' + key.slice(-4);
+  if (key.length <= 4) return '****';
+  if (key.length <= 8) return '****' + key.slice(-2);
   return key.slice(0, 4) + '...' + key.slice(-4);
 }

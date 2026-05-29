@@ -68,6 +68,9 @@ let intervalId: ReturnType<typeof setInterval> | null = null;
 export function startHealthChecker(): void {
   if (intervalId) return;
   console.log(`[Health] Starting health checker (every ${CHECK_INTERVAL_MS / 1000}s)`);
+  // Run once immediately so freshly added keys get a status without waiting a
+  // full interval; then settle into the periodic schedule.
+  checkAllKeys().catch(err => console.error('[Health] Initial check failed:', err));
   intervalId = setInterval(() => {
     checkAllKeys().catch(err => console.error('[Health] Check failed:', err));
   }, CHECK_INTERVAL_MS);

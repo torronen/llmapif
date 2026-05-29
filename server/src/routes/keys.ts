@@ -17,7 +17,7 @@ const PLATFORMS = [
 
 const addKeySchema = z.object({
   platform: z.enum(PLATFORMS),
-  key: z.string().min(1),
+  key: z.string().min(1).max(8192),
   label: z.string().optional(),
 });
 

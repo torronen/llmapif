@@ -351,7 +351,7 @@ export class GoogleProvider extends BaseProvider {
     const seenToolCallKeys = new Set<string>();
 
     while (true) {
-      const { done, value } = await reader.read();
+      const { done, value } = await this.readChunkWithIdleTimeout(reader);
       if (done) break;
 
       buffer += decoder.decode(value, { stream: true });

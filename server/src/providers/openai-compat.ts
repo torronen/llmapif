@@ -112,7 +112,7 @@ export class OpenAICompatProvider extends BaseProvider {
     let buffer = '';
 
     while (true) {
-      const { done, value } = await reader.read();
+      const { done, value } = await this.readChunkWithIdleTimeout(reader, this.timeoutMs);
       if (done) break;
 
       buffer += decoder.decode(value, { stream: true });

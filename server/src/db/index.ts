@@ -6,7 +6,12 @@ import { fileURLToPath } from 'url';
 import { initEncryptionKey } from '../lib/crypto.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DB_PATH = path.resolve(__dirname, '../../data/freeapi.db');
+// Default to a data dir alongside the build, but allow an explicit override so
+// deployments can keep the SQLite file on a persistent volume outside the
+// source/build tree.
+const DB_PATH = process.env.DATABASE_PATH
+  ? path.resolve(process.env.DATABASE_PATH)
+  : path.resolve(__dirname, '../../data/freeapi.db');
 
 let db: Database.Database;
 

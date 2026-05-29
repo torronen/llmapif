@@ -1,0 +1,24 @@
+services:
+  llmapif:
+    build: .
+    container_name: llmapif
+    ports:
+      - "3001:3001"
+    volumes:
+      - llmapif-data:/data
+    environment:
+      - NODE_ENV=production
+      - PORT=3001
+      - DATABASE_PATH=/data/freeapi.db
+      # Required. Generate with:
+      #   node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+      # Provide via a .env file next to this compose file, or your shell env.
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:?ENCRYPTION_KEY is required — generate a 64-char hex key}
+      # Required in Docker: the admin API is reachable over the published port,
+      # so it must be protected by a password (the server refuses to start
+      # otherwise). Choose a long passphrase.
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:?ADMIN_PASSWORD is required for Docker deployments}
+    restart: unless-stopped
+
+volumes:
+  llmapif-data:

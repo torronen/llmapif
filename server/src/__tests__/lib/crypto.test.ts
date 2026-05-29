@@ -33,8 +33,13 @@ describe('Crypto', () => {
       expect(maskKey('gsk_test1234567890abcdef')).toBe('gsk_...cdef');
     });
 
-    it('should mask short keys', () => {
-      expect(maskKey('abcd')).toBe('****abcd');
+    it('should fully mask very short keys (<= 4 chars)', () => {
+      // A 4-char key is short enough that revealing any of it leaks too much.
+      expect(maskKey('abcd')).toBe('****');
+    });
+
+    it('should reveal only the last 2 chars of short keys (5-8 chars)', () => {
+      expect(maskKey('abcdef')).toBe('****ef');
     });
   });
 });
