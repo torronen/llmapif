@@ -34,7 +34,10 @@ export function initDb(dbPath?: string): Database.Database {
   }
 
   db = new Database(resolvedPath);
-  if (!isMemory) db.pragma('journal_mode = WAL');
+  if (!isMemory) {
+    db.pragma('journal_mode = WAL');
+    db.pragma('synchronous = NORMAL');
+  }
   db.pragma('foreign_keys = ON');
 
   createTables(db);

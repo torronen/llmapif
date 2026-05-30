@@ -37,6 +37,8 @@ describe('CohereProvider', () => {
       [{ role: 'user', content: 'Hi' }],
       'command-r-plus-08-2024',
       {
+        max_tokens: 100,
+        temperature: 0.7,
         tools: [{
           type: 'function',
           function: {
@@ -52,6 +54,8 @@ describe('CohereProvider', () => {
 
     expect(capturedUrl).toContain('/compatibility/v1/chat/completions');
     expect(capturedBody.tools).toHaveLength(1);
+    expect(capturedBody.max_tokens).toBe(100);
+    expect(capturedBody.temperature).toBe(0.7);
     expect(result.object).toBe('chat.completion');
     expect(result.choices[0].message.content).toBe('Hello from Cohere!');
     expect(result.usage.prompt_tokens).toBe(10);
@@ -59,8 +63,48 @@ describe('CohereProvider', () => {
     expect(result._routed_via?.platform).toBe('cohere');
   });
 
-  it('should validate key', async () => {
-    vi.spyOn(global, 'fetch').mockResolvedValueOnce({ ok: true } as any);
-    expect(await provider.validateKey('valid')).toBe(true);
+  it('should stream chat completion', async () => {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"Hi"}}]}\n\n'));
+        controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+        controller.close();
+      }
+    });
+
+    vi.spyOn(global, 'fetch').mockImplementation(async () => ({
+      ok: true,
+      body: { getReader: () => stream.getReader() }
+    } as any));
+
+    const gen = provider.streamChatCompletion('my-token', [{ role: 'user', content: 'hello' }], 'command-r');
+    const chunks = [];
+    for await (const chunk of gen) {
+      chunks.push(chunk);
+    }
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0].choices[0].delta.content).toBe('Hi');
+  });
+
+  it('should validate key successfully', async () => {
+    vi.spyOn(global, 'fetch').mockImplementation(async () => ({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ models: [] })
+    } as any));
+
+    const isValid = await provider.validateKey('valid');
+    expect(isValid).toBe(true);
+  });
+
+  it('should return false for invalid key on 401', async () => {
+    vi.spyOn(global, 'fetch').mockImplementation(async () => ({
+      ok: false,
+      status: 401
+    } as any));
+
+    const isValid = await provider.validateKey('token');
+    expect(isValid).toBe(false);
   });
 });

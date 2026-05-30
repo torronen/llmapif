@@ -48,7 +48,7 @@ export function createApp() {
       callback(null, !origin || allowedCorsOrigins.has(origin));
     },
   }));
-  app.use(express.json({ limit: '1mb' }));
+  app.use(express.json({ limit: '50mb' }));
 
   // Admin API. Two layers of protection (both no-ops only for the exempt
   // endpoints below): a loopback-only guard (override with ADMIN_ALLOW_REMOTE=

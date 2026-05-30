@@ -92,4 +92,62 @@ describe('CloudflareProvider', () => {
     expect(capturedBody.messages[1].content).toBe('');
     expect(capturedBody.messages[1].tool_calls).toHaveLength(1);
   });
+
+  it('should stream chat completion', async () => {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"Hi"}}]}\n\n'));
+        controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+        controller.close();
+      }
+    });
+
+    vi.spyOn(global, 'fetch').mockImplementation(async () => ({
+      ok: true,
+      body: { getReader: () => stream.getReader() }
+    } as any));
+
+    const gen = provider.streamChatCompletion('acc:token', [{ role: 'user', content: 'hello' }], 'model');
+    const chunks = [];
+    for await (const chunk of gen) {
+      chunks.push(chunk);
+    }
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0].choices[0].delta.content).toBe('Hi');
+  });
+
+  it('should handle API errors in stream', async () => {
+    vi.spyOn(global, 'fetch').mockImplementation(async () => ({
+      ok: false,
+      status: 400,
+      json: () => Promise.resolve({ error: { message: 'Bad request' } })
+    } as any));
+
+    const gen = provider.streamChatCompletion('acc:token', [], 'model');
+    await expect(async () => {
+      for await (const _ of gen) {}
+    }).rejects.toThrow(/Bad request/);
+  });
+
+  it('should validate key successfully', async () => {
+    vi.spyOn(global, 'fetch').mockImplementation(async () => ({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ success: true, result: { status: 'active' } })
+    } as any));
+
+    const isValid = await provider.validateKey('acc:token');
+    expect(isValid).toBe(true);
+  });
+
+  it('should return false for invalid key on 401', async () => {
+    vi.spyOn(global, 'fetch').mockImplementation(async () => ({
+      ok: false,
+      status: 401
+    } as any));
+
+    const isValid = await provider.validateKey('acc:token');
+    expect(isValid).toBe(false);
+  });
 });

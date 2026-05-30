@@ -97,4 +97,60 @@ describe('Keys API', () => {
     const { status } = await request(app, 'DELETE', '/api/keys/99999');
     expect(status).toBe(404);
   });
+
+  it('should toggle all keys for a platform', async () => {
+    await request(app, 'POST', '/api/keys', { platform: 'openrouter', key: 'sk-or-123' });
+    await request(app, 'POST', '/api/keys', { platform: 'openrouter', key: 'sk-or-456' });
+
+    const toggleRes = await request(app, 'PATCH', '/api/keys/platform/openrouter', { enabled: false });
+    expect(toggleRes.status).toBe(200);
+    expect(toggleRes.body.enabled).toBe(false);
+
+    const keysRes = await request(app, 'GET', '/api/keys');
+    const openrouterKeys = keysRes.body.filter((k: any) => k.platform === 'openrouter');
+    expect(openrouterKeys.every((k: any) => k.enabled === false)).toBe(true);
+  });
+
+  it('should reject toggling invalid platform', async () => {
+    const res = await request(app, 'PATCH', '/api/keys/platform/invalid_plat', { enabled: false });
+    expect(res.status).toBe(400);
+  });
+
+  it('should reject toggling platform with invalid payload', async () => {
+    const res = await request(app, 'PATCH', '/api/keys/platform/openrouter', { enabled: 'not boolean' });
+    expect(res.status).toBe(400);
+  });
+
+  it('should reject deleting key with invalid ID', async () => {
+    const res = await request(app, 'DELETE', '/api/keys/invalid');
+    expect(res.status).toBe(400);
+  });
+
+  it('should handle toggling non-existent key', async () => {
+    const res = await request(app, 'PATCH', '/api/keys/99999', { enabled: false });
+    expect(res.status).toBe(404);
+  });
+
+  it('should reject toggling key with invalid ID', async () => {
+    const res = await request(app, 'PATCH', '/api/keys/invalid', { enabled: false });
+    expect(res.status).toBe(400);
+  });
+
+  it('should reject toggling key with invalid payload', async () => {
+    const res = await request(app, 'PATCH', '/api/keys/1', { enabled: 'not boolean' });
+    expect(res.status).toBe(400);
+  });
+
+  it('should handle decrypt failure in listing', async () => {
+    const db = getDb();
+    db.prepare(`
+      INSERT INTO api_keys (platform, label, encrypted_key, iv, auth_tag, status, enabled)
+      VALUES ('openrouter', 'broken', 'bad_data', 'bad_iv', 'bad_tag', 'unknown', 1)
+    `).run();
+
+    const res = await request(app, 'GET', '/api/keys');
+    expect(res.status).toBe(200);
+    const brokenKey = res.body.find((k: any) => k.label === 'broken');
+    expect(brokenKey.maskedKey).toBe('[decrypt failed]');
+  });
 });

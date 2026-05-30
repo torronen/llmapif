@@ -102,4 +102,22 @@ describe('Fallback API', () => {
     const { status } = await request(app, 'POST', '/api/fallback/sort/invalid');
     expect(status).toBe(400);
   });
+
+  it('PUT /api/fallback with invalid data returns 400', async () => {
+    const { status } = await request(app, 'PUT', '/api/fallback', [{ invalid: 'data' }]);
+    expect(status).toBe(400);
+  });
+
+  it('POST /api/fallback/sort/budget sorts by monthly token budget', async () => {
+    const { status } = await request(app, 'POST', '/api/fallback/sort/budget');
+    expect(status).toBe(200);
+  });
+
+  it('GET /api/fallback/token-usage returns usage stats', async () => {
+    const { status, body } = await request(app, 'GET', '/api/fallback/token-usage');
+    expect(status).toBe(200);
+    expect(body).toHaveProperty('totalBudget');
+    expect(body).toHaveProperty('totalUsed');
+    expect(body).toHaveProperty('models');
+  });
 });

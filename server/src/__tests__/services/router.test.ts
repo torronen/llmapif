@@ -118,4 +118,48 @@ describe('Router', () => {
     expect(result.apiKey).toBe('test-groq-key');
     expect(corruptKey.status).toBe('error');
   });
+
+  it('sticky sessions (preferredModelDbId) boosts model to front of chain', () => {
+    const db = getDb();
+    const { encrypted, iv, authTag } = encrypt('test-key');
+    
+    // Have keys for both
+    db.prepare(`
+      INSERT INTO api_keys (platform, label, encrypted_key, iv, auth_tag, status, enabled)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run('google', 'test', encrypted, iv, authTag, 'healthy', 1);
+    
+    db.prepare(`
+      INSERT INTO api_keys (platform, label, encrypted_key, iv, auth_tag, status, enabled)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run('groq', 'test', encrypted, iv, authTag, 'healthy', 1);
+
+    // Google naturally wins due to higher intelligence rank in initDb
+    const resultNormal = routeRequest();
+    expect(resultNormal.platform).toBe('google');
+
+    // But if we pass groq's model_db_id as preferred, it should win.
+    const groqModelDbId = db.prepare("SELECT id FROM models WHERE platform = 'groq' ORDER BY intelligence_rank ASC LIMIT 1").get() as any;
+    
+    const resultSticky = routeRequest(1000, undefined, groqModelDbId.id);
+    expect(resultSticky.platform).toBe('groq');
+  });
+
+  it('getAllPenalties and skipped fallback config', async () => {
+    // They share state because vitest loads them once.
+    const { recordRateLimitHit, getAllPenalties, routeRequest } = await import('../../services/router.js');
+    recordRateLimitHit(1);
+    recordRateLimitHit(1); // count=2 => high penalty
+    recordRateLimitHit(2); // count=1 => low penalty
+
+    const penalties = getAllPenalties();
+    expect(penalties.length).toBeGreaterThan(0);
+    expect(penalties[0].modelDbId).toBe(1); // highest penalty first
+    expect(penalties[0].count).toBe(2);
+
+    // Also test that disabled fallback entries are skipped
+    const db = getDb();
+    db.prepare('UPDATE fallback_config SET enabled = 0').run();
+    expect(() => routeRequest()).toThrow(/exhausted/i);
+  });
 });

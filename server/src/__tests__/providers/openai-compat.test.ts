@@ -233,6 +233,54 @@ describe('OpenAICompatProvider', () => {
     const result = await provider.chatCompletion('k', [{ role: 'user', content: 'hi' }], 'm');
     expect(result.choices[0].message.content).toBe('normal answer');
   });
+
+  it('should stream chat completion and fix missing finish_reason on OpenRouter', async () => {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode('data: {"id":"1","choices":[{"delta":{"content":"Part1"}}]}\n\n'));
+        controller.enqueue(encoder.encode('data: {"id":"1","choices":[{"delta":{}}]}\n\n'));
+        controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+        controller.close();
+      }
+    });
+
+    vi.spyOn(global, 'fetch').mockImplementation(async () => ({
+      ok: true,
+      body: { getReader: () => stream.getReader() }
+    } as any));
+
+    // Specifically test OpenRouter behavior
+    const orProvider = new OpenAICompatProvider({
+      platform: 'openrouter',
+      name: 'OpenRouter',
+      baseUrl: 'https://openrouter.ai/api/v1',
+    });
+
+    const gen = orProvider.streamChatCompletion('my-token', [{ role: 'user', content: 'hello' }], 'model');
+    const chunks = [];
+    for await (const chunk of gen) {
+      chunks.push(chunk);
+    }
+    
+    expect(chunks).toHaveLength(2);
+    expect(chunks[0].choices[0].delta.content).toBe('Part1');
+    expect(chunks[1].choices[0].delta).toEqual({});
+  });
+
+  it('should handle API errors in stream', async () => {
+    vi.spyOn(global, 'fetch').mockImplementation(async () => ({
+      ok: false,
+      status: 400,
+      statusText: 'Bad Request',
+      json: () => Promise.resolve({ error: { message: 'Stream failed' } })
+    } as any));
+
+    const gen = provider.streamChatCompletion('acc:token', [], 'model');
+    await expect(async () => {
+      for await (const _ of gen) {}
+    }).rejects.toThrow(/Stream failed/);
+  });
 });
 
 describe('OpenAICompatProvider - platform instances', () => {

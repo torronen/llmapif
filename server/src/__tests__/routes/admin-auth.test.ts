@@ -41,6 +41,10 @@ describe('Admin authentication', () => {
 
     const keys = await request(app, 'GET', '/api/keys');
     expect(keys.status).toBe(200);
+
+    const login = await request(app, 'POST', '/api/auth/login', { password: 'any' });
+    expect(login.status).toBe(200);
+    expect(login.body.authRequired).toBe(false);
   });
 
   it('guards admin routes and issues a working token when ADMIN_PASSWORD is set', async () => {
@@ -53,6 +57,10 @@ describe('Admin authentication', () => {
 
     // Wrong password → 401
     expect((await request(app, 'POST', '/api/auth/login', { password: 'nope' })).status).toBe(401);
+
+    // Missing password payload -> 400
+    expect((await request(app, 'POST', '/api/auth/login', {})).status).toBe(400);
+    expect((await request(app, 'POST', '/api/auth/login', { password: '' })).status).toBe(400);
 
     // Correct password → token
     const login = await request(app, 'POST', '/api/auth/login', { password: 's3cret-pass' });

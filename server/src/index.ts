@@ -3,6 +3,7 @@ import { createApp } from './app.js';
 import { initDb, getDb } from './db/index.js';
 import { startHealthChecker } from './services/health.js';
 import { assertRemoteAccessIsSafe, isAdminAuthEnabled } from './lib/adminAuth.js';
+import { flushLogBatch } from './routes/proxy.js';
 import http from 'http';
 
 const PORT = process.env.PORT ?? 3001;
@@ -40,6 +41,7 @@ async function main() {
     server.close(() => {
       console.log('HTTP server closed.');
       try {
+        flushLogBatch();
         getDb().close();
         console.log('Database connection closed.');
       } catch (err) {

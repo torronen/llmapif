@@ -346,6 +346,9 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
     }
 
     recordRequest(route.platform, route.modelId, route.keyId);
+    
+    // Reserve estimated tokens upfront to prevent concurrent requests from busting limits
+    recordTokens(route.platform, route.modelId, route.keyId, estimatedTotal);
 
     try {
       if (stream) {
@@ -382,7 +385,10 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
           res.write('data: [DONE]\n\n');
           res.end();
 
-          recordTokens(route.platform, route.modelId, route.keyId, estimatedInputTokens + totalOutputTokens);
+          const finalTokens = estimatedInputTokens + totalOutputTokens;
+          if (finalTokens !== estimatedTotal) {
+            recordTokens(route.platform, route.modelId, route.keyId, finalTokens - estimatedTotal);
+          }
           recordSuccess(route.modelDbId);
           setStickyModel(messages, route.modelDbId);
           logRequest(route.platform, route.modelId, route.keyId, 'success', estimatedInputTokens, totalOutputTokens, Date.now() - start, null);
@@ -410,7 +416,9 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
         );
 
         const totalTokens = result.usage?.total_tokens ?? 0;
-        recordTokens(route.platform, route.modelId, route.keyId, totalTokens);
+        if (totalTokens !== estimatedTotal) {
+          recordTokens(route.platform, route.modelId, route.keyId, totalTokens - estimatedTotal);
+        }
         recordSuccess(route.modelDbId);
         setStickyModel(messages, route.modelDbId);
 
@@ -429,6 +437,9 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
     } catch (err: any) {
       const latency = Date.now() - start;
       logRequest(route.platform, route.modelId, route.keyId, 'error', estimatedInputTokens, 0, latency, err.message);
+
+      // Refund the reserved tokens on failure so the rate limit isn't artificially depleted
+      recordTokens(route.platform, route.modelId, route.keyId, -estimatedTotal);
 
       if (isRetryableError(err)) {
         // Put this model+key on cooldown and try the next one
@@ -466,6 +477,46 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
   });
 });
 
+let lastRequestPruneMs = 0;
+const REQUEST_PRUNE_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
+const REQUEST_RETENTION_DAYS = process.env.REQUEST_RETENTION_DAYS ? parseInt(process.env.REQUEST_RETENTION_DAYS, 10) : 30;
+
+interface LogEntry {
+  platform: string;
+  modelId: string;
+  keyId: number;
+  status: string;
+  inputTokens: number;
+  outputTokens: number;
+  latencyMs: number;
+  error: string | null;
+}
+const logBatch: LogEntry[] = [];
+
+export function flushLogBatch() {
+  if (logBatch.length === 0) return;
+  try {
+    const db = getDb();
+    const insert = db.prepare(`
+      INSERT INTO requests (platform, model_id, key_id, status, input_tokens, output_tokens, latency_ms, error)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    const entries = [...logBatch];
+    logBatch.length = 0;
+    
+    db.transaction((items: LogEntry[]) => {
+      for (const e of items) {
+        insert.run(e.platform, e.modelId, e.keyId, e.status, e.inputTokens, e.outputTokens, e.latencyMs, e.error);
+      }
+    })(entries);
+  } catch (err) {
+    console.error('Failed to flush log batch:', err);
+  }
+}
+
+// Flush every 2 seconds in the background
+setInterval(flushLogBatch, 2000).unref();
+
 function logRequest(
   platform: string,
   modelId: string,
@@ -477,11 +528,14 @@ function logRequest(
   error: string | null,
 ) {
   try {
-    const db = getDb();
-    db.prepare(`
-      INSERT INTO requests (platform, model_id, key_id, status, input_tokens, output_tokens, latency_ms, error)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(platform, modelId, keyId, status, inputTokens, outputTokens, latencyMs, error);
+    logBatch.push({ platform, modelId, keyId, status, inputTokens, outputTokens, latencyMs, error });
+
+    const now = Date.now();
+    if (now - lastRequestPruneMs > REQUEST_PRUNE_INTERVAL_MS) {
+      const db = getDb();
+      db.prepare(`DELETE FROM requests WHERE created_at < datetime('now', '-${REQUEST_RETENTION_DAYS} days')`).run();
+      lastRequestPruneMs = now;
+    }
   } catch (e) {
     console.error('Failed to log request:', e);
   }
