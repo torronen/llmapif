@@ -109,4 +109,42 @@ describe('Virtual "auto" model', () => {
     expect(status).toBe(400);
     expect(body.error.code).toBe('model_not_found');
   });
+
+  it('supports strategy via auto:smart, auto:fast, auto:cheap', async () => {
+    // Add another key to test strategy
+    await request(app, 'POST', '/api/keys', {
+      platform: 'google',
+      key: 'gemini_auto_model_test',
+      label: 'auto-model-gemini',
+    });
+
+    const origFetch = global.fetch;
+    let requestedUrl = '';
+    vi.spyOn(global, 'fetch').mockImplementation(async (url, init) => {
+      const urlStr = typeof url === 'string' ? url : url.toString();
+      if (urlStr.includes('127.0.0.1')) return origFetch(url, init);
+      
+      requestedUrl = urlStr;
+      return {
+        ok: true,
+        json: () => Promise.resolve({
+          id: 'chatcmpl-auto',
+          object: 'chat.completion',
+          created: 123,
+          model: 'routed-model',
+          choices: [{ index: 0, message: { role: 'assistant', content: 'routed' }, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 5, completion_tokens: 3, total_tokens: 8 },
+        }),
+      } as any;
+    });
+
+    const { status } = await request(app, 'POST', '/v1/chat/completions', {
+      model: 'auto:fast',
+      messages: [{ role: 'user', content: 'hello' }],
+    }, authHeaders());
+
+    expect(status).toBe(200);
+    // Since groq is much faster than google, it should have chosen groq
+    expect(requestedUrl).toContain('api.groq.com');
+  });
 });

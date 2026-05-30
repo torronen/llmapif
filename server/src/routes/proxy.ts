@@ -296,7 +296,16 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
   // different model would be surprising to OpenAI-compatible clients.
   // Sticky-session is the fallback when no `model` field was sent at all.
   let preferredModel: number | undefined;
-  if (isAutoModel(requestedModel)) {
+  let strategy: 'default' | 'smart' | 'fast' | 'cheap' = 'default';
+
+  if (requestedModel && requestedModel.startsWith('auto:')) {
+    const s = requestedModel.split(':')[1];
+    if (s === 'smart' || s === 'fast' || s === 'cheap') {
+      strategy = s as 'smart' | 'fast' | 'cheap';
+    }
+  }
+
+  if (isAutoModel(requestedModel) || (requestedModel && requestedModel.startsWith('auto:'))) {
     // Explicit "auto" → behave exactly like an omitted model field.
     preferredModel = getStickyModel(messages);
   } else if (requestedModel) {
@@ -327,7 +336,7 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
     let route: RouteResult;
     try {
-      route = routeRequest(estimatedTotal, skipKeys.size > 0 ? skipKeys : undefined, preferredModel);
+      route = routeRequest(estimatedTotal, skipKeys.size > 0 ? skipKeys : undefined, preferredModel, strategy);
     } catch (err: any) {
       // No more models available
       if (lastError) {

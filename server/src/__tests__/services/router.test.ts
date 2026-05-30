@@ -162,4 +162,43 @@ describe('Router', () => {
     db.prepare('UPDATE fallback_config SET enabled = 0').run();
     expect(() => routeRequest()).toThrow(/exhausted/i);
   });
+
+  describe('routing strategies', () => {
+    it('sorts by intelligence_rank when strategy is smart', async () => {
+      const db = getDb();
+      const { encrypted, iv, authTag } = encrypt('test-key');
+      
+      db.prepare(`
+        INSERT INTO api_keys (platform, label, encrypted_key, iv, auth_tag, status, enabled)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `).run('google', 'test', encrypted, iv, authTag, 'healthy', 1);
+      
+      db.prepare(`
+        INSERT INTO api_keys (platform, label, encrypted_key, iv, auth_tag, status, enabled)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `).run('groq', 'test', encrypted, iv, authTag, 'healthy', 1);
+
+      // We make groq smarter than google for this test
+      db.prepare(`UPDATE fallback_config SET enabled = 1`).run();
+      db.prepare(`UPDATE models SET intelligence_rank = 1 WHERE platform = 'groq'`).run();
+      db.prepare(`UPDATE models SET intelligence_rank = 100 WHERE platform = 'google'`).run();
+      
+      const resultSmart = routeRequest(1000, undefined, undefined, 'smart');
+      expect(resultSmart.platform).toBe('groq');
+
+      // But if strategy is 'fast', we can make google faster
+      db.prepare(`UPDATE models SET speed_rank = 1 WHERE platform = 'google'`).run();
+      db.prepare(`UPDATE models SET speed_rank = 100 WHERE platform = 'groq'`).run();
+      
+      const resultFast = routeRequest(1000, undefined, undefined, 'fast');
+      expect(resultFast.platform).toBe('google');
+
+      // And if strategy is 'cheap', we can make groq cheaper (higher monthly_token_budget)
+      db.prepare(`UPDATE models SET monthly_token_budget = 99999999 WHERE platform = 'groq'`).run();
+      db.prepare(`UPDATE models SET monthly_token_budget = 1 WHERE platform = 'google'`).run();
+
+      const resultCheap = routeRequest(1000, undefined, undefined, 'cheap');
+      expect(resultCheap.platform).toBe('groq');
+    });
+  });
 });

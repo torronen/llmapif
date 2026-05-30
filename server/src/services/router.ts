@@ -119,6 +119,19 @@ export function getAllPenalties(): Array<{ modelDbId: number; count: number; pen
   return result.sort((a, b) => b.penalty - a.penalty);
 }
 
+function parseBudget(budget: any): number {
+  if (!budget) return 0;
+  if (typeof budget === 'number') return budget;
+  const str = String(budget).toUpperCase();
+  const match = str.match(/([0-9.]+)/g);
+  if (!match) return 0;
+  let val = parseFloat(match[match.length - 1]);
+  if (str.includes('M')) val *= 1000000;
+  else if (str.includes('K')) val *= 1000;
+  else if (str.includes('B')) val *= 1000000000;
+  return val;
+}
+
 /**
  * Route a request to the best available model.
  * Models are sorted by (base_priority + rate_limit_penalty) so frequently
@@ -130,22 +143,45 @@ export function getAllPenalties(): Array<{ modelDbId: number; count: number; pen
  * @param estimatedTokens - estimated total tokens for rate limit check
  * @param skipKeys - set of "platform:modelId:keyId" to skip (failed on this request)
  * @param preferredModelDbId - try this model first (sticky session)
+ * @param strategy - routing strategy for this request (smart, fast, cheap)
  */
-export function routeRequest(estimatedTokens = 1000, skipKeys?: Set<string>, preferredModelDbId?: number): RouteResult {
+export function routeRequest(
+  estimatedTokens = 1000,
+  skipKeys?: Set<string>,
+  preferredModelDbId?: number,
+  strategy: 'default' | 'smart' | 'fast' | 'cheap' = 'default'
+): RouteResult {
   const db = getDb();
 
-  // Get fallback chain ordered by priority
+  // Get fallback chain and model metadata
   const fallbackChain = db.prepare(`
-    SELECT fc.model_db_id, fc.priority, fc.enabled
+    SELECT fc.model_db_id, fc.priority, fc.enabled, m.intelligence_rank, m.speed_rank, m.monthly_token_budget
     FROM fallback_config fc
-    ORDER BY fc.priority ASC
-  `).all() as FallbackRow[];
+    JOIN models m ON fc.model_db_id = m.id
+  `).all() as (FallbackRow & { intelligence_rank: number, speed_rank: number, monthly_token_budget: any })[];
+
+  // Assign base priority based on strategy
+  let ordered = fallbackChain.slice();
+  if (strategy === 'smart') {
+    ordered.sort((a, b) => (a.intelligence_rank ?? 999) - (b.intelligence_rank ?? 999));
+  } else if (strategy === 'fast') {
+    ordered.sort((a, b) => (a.speed_rank ?? 999) - (b.speed_rank ?? 999));
+  } else if (strategy === 'cheap') {
+    ordered.sort((a, b) => parseBudget(b.monthly_token_budget) - parseBudget(a.monthly_token_budget));
+  } else {
+    ordered.sort((a, b) => (a.priority ?? 999) - (b.priority ?? 999));
+  }
 
   // Apply dynamic penalties: sort by (base priority + penalty)
-  const sortedChain = fallbackChain.map(entry => ({
-    ...entry,
-    effectivePriority: entry.priority + getPenalty(entry.model_db_id),
-  })).sort((a, b) => a.effectivePriority - b.effectivePriority);
+  const sortedChain = ordered.map((entry, idx) => {
+    // We assign a dynamic rank based on their position in the sorted array
+    // so penalties can shift them naturally.
+    const baseRank = idx + 1;
+    return {
+      ...entry,
+      effectivePriority: baseRank + getPenalty(entry.model_db_id),
+    };
+  }).sort((a, b) => a.effectivePriority - b.effectivePriority);
 
   // Sticky session: move preferred model to front of chain
   if (preferredModelDbId) {
