@@ -327,7 +327,16 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
     let route: RouteResult;
     try {
-      route = routeRequest(estimatedTotal, skipKeys.size > 0 ? skipKeys : undefined, preferredModel);
+      // Execute routing and limit reservations inside an IMMEDIATE transaction
+      // to ensure perfect consistency of rate limit counters under high concurrency.
+      const tx = getDb().transaction(() => {
+        const r = routeRequest(estimatedTotal, skipKeys.size > 0 ? skipKeys : undefined, preferredModel);
+        recordRequest(r.platform, r.modelId, r.keyId);
+        // Reserve estimated tokens upfront to prevent concurrent requests from busting limits
+        recordTokens(r.platform, r.modelId, r.keyId, estimatedTotal);
+        return r;
+      });
+      route = tx.immediate();
     } catch (err: any) {
       // No more models available
       if (lastError) {
@@ -344,8 +353,6 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
       }
       return;
     }
-
-    recordRequest(route.platform, route.modelId, route.keyId);
 
     try {
       if (stream) {
