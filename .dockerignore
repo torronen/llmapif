@@ -1,0 +1,23 @@
+# Never copy host-built artifacts into the image. In particular, host
+# node_modules contains a macOS (Mach-O) better-sqlite3 binary that would
+# clobber the Linux binary compiled inside the builder ("invalid ELF header" /
+# "Exec format error" at runtime).
+node_modules
+**/node_modules
+
+# Build outputs (regenerated inside the image)
+dist
+**/dist
+
+# VCS, env, and local cruft
+.git
+.gitignore
+.env
+.env.*
+*.log
+data
+**/*.tsbuildinfo
+
+# Docs / assets not needed at build time
+repo-assets
+docs

@@ -1,5 +1,8 @@
 # Stage 1: Build
-FROM node:22-alpine AS builder
+# Debian (glibc) base rather than Alpine (musl): the better-sqlite3 native
+# addon ships prebuilt glibc binaries, so this avoids the musl "Exec format
+# error" you get when an incompatible prebuilt binary is pulled on Alpine.
+FROM node:22-bookworm-slim AS builder
 
 WORKDIR /app
 
@@ -19,7 +22,7 @@ COPY . .
 RUN npm run build
 
 # Stage 2: Production
-FROM node:22-alpine
+FROM node:22-bookworm-slim
 
 WORKDIR /app
 
