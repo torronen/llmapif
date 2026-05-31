@@ -1,8 +1,9 @@
-import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
 import type { Express } from 'express';
 import type { Server } from 'node:http';
 import { createApp } from '../../app.js';
 import { initDb } from '../../db/index.js';
+import { clearAllLoginAttempts } from '../../middleware/loginRateLimit.js';
 
 let baseUrl = '';
 
@@ -32,6 +33,11 @@ describe('Admin authentication', () => {
   });
 
   afterAll(() => new Promise<void>((resolve) => server.close(() => resolve())));
+
+  beforeEach(() => {
+    // Isolate the in-memory login-rate-limit counter between tests.
+    clearAllLoginAttempts();
+  });
 
   afterEach(() => {
     if (original === undefined) delete process.env.ADMIN_PASSWORD;
@@ -83,5 +89,28 @@ describe('Admin authentication', () => {
   it('keeps the health ping reachable without a token even when auth is on', async () => {
     process.env.ADMIN_PASSWORD = 's3cret-pass';
     expect((await request(app, 'GET', '/api/ping')).status).toBe(200);
+  });
+
+  it('throttles repeated failed logins (5 allowed, 6th blocked)', async () => {
+    process.env.ADMIN_PASSWORD = 's3cret-pass';
+    for (let i = 0; i < 5; i++) {
+      expect((await request(app, 'POST', '/api/auth/login', { password: 'wrong' })).status).toBe(401);
+    }
+    const blocked = await request(app, 'POST', '/api/auth/login', { password: 'wrong' });
+    expect(blocked.status).toBe(429);
+    expect(blocked.body.error.type).toBe('rate_limit_error');
+  });
+
+  it('clears the failed-attempt counter after a successful login', async () => {
+    process.env.ADMIN_PASSWORD = 's3cret-pass';
+    for (let i = 0; i < 4; i++) {
+      expect((await request(app, 'POST', '/api/auth/login', { password: 'wrong' })).status).toBe(401);
+    }
+    // Correct login resets the counter...
+    expect((await request(app, 'POST', '/api/auth/login', { password: 's3cret-pass' })).status).toBe(200);
+    // ...so five more failures are all 401, never 429.
+    for (let i = 0; i < 5; i++) {
+      expect((await request(app, 'POST', '/api/auth/login', { password: 'wrong' })).status).toBe(401);
+    }
   });
 });

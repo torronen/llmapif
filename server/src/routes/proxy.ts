@@ -491,7 +491,12 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
 
 let lastRequestPruneMs = 0;
 const REQUEST_PRUNE_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
-const REQUEST_RETENTION_DAYS = process.env.REQUEST_RETENTION_DAYS ? parseInt(process.env.REQUEST_RETENTION_DAYS, 10) : 30;
+// Validate the parsed value: a NaN/zero/negative env would otherwise produce
+// `'-NaN days'` and silently disable pruning. Fall back to 30 days.
+const parsedRetentionDays = parseInt(process.env.REQUEST_RETENTION_DAYS ?? '', 10);
+const REQUEST_RETENTION_DAYS = Number.isFinite(parsedRetentionDays) && parsedRetentionDays > 0
+  ? parsedRetentionDays
+  : 30;
 
 interface LogEntry {
   platform: string;

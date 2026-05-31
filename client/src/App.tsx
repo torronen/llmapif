@@ -35,23 +35,26 @@ function NavItem({ to, children }: { to: string; children: React.ReactNode }) {
   )
 }
 
+function prefersDark(): boolean {
+  if (typeof window === 'undefined') return false
+  const stored = localStorage.getItem('theme')
+  if (stored === 'dark') return true
+  if (stored === 'light') return false
+  return window.matchMedia('(prefers-color-scheme: dark)').matches
+}
+
 function DarkModeToggle() {
-  const [dark, setDark] = useState(() =>
-    typeof window !== 'undefined' && document.documentElement.classList.contains('dark')
-  )
+  // Compute the initial theme lazily (no setState in an effect); the effect only
+  // mirrors `dark` onto the document element.
+  const [dark, setDark] = useState(prefersDark)
 
   useEffect(() => {
-    const stored = localStorage.getItem('theme')
-    if (stored === 'dark' || (!stored && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
-      document.documentElement.classList.add('dark')
-      setDark(true)
-    }
-  }, [])
+    document.documentElement.classList.toggle('dark', dark)
+  }, [dark])
 
   function toggle() {
     const next = !dark
     setDark(next)
-    document.documentElement.classList.toggle('dark', next)
     localStorage.setItem('theme', next ? 'dark' : 'light')
   }
 

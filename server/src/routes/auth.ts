@@ -2,6 +2,7 @@ import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { z } from 'zod';
 import { isAdminAuthEnabled, verifyPassword, issueToken } from '../lib/adminAuth.js';
+import { loginRateLimit, resetLoginAttempts } from '../middleware/loginRateLimit.js';
 
 export const authRouter = Router();
 
@@ -12,9 +13,10 @@ authRouter.get('/status', (_req: Request, res: Response) => {
 
 const loginSchema = z.object({ password: z.string().min(1) });
 
-authRouter.post('/login', (req: Request, res: Response) => {
+authRouter.post('/login', loginRateLimit, (req: Request, res: Response) => {
   if (!isAdminAuthEnabled()) {
     // Auth disabled — nothing to log into. Tell the client so it can proceed.
+    resetLoginAttempts(req);
     res.json({ token: null, authRequired: false });
     return;
   }
@@ -30,5 +32,7 @@ authRouter.post('/login', (req: Request, res: Response) => {
     return;
   }
 
+  // Successful login — clear this IP's failed-attempt counter.
+  resetLoginAttempts(req);
   res.json({ token: issueToken(), authRequired: true });
 });

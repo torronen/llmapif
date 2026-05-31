@@ -10,19 +10,34 @@ jobs:
   test:
     name: Test & build
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: ['20', '22']
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: ${{ matrix.node-version }}
           cache: 'npm'
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci
+
+      - name: Typecheck (server)
+        run: npx tsc --noEmit -p server/tsconfig.json
+
+      - name: Typecheck (client)
+        run: npx tsc --noEmit -p client/tsconfig.app.json
+
+      - name: Lint (client)
+        run: npm run lint -w client
 
       - name: Run tests
         run: npm test
 
       - name: Build workspaces
         run: npm run build
+
+      - name: Audit (high severity)
+        run: npm audit --audit-level=high

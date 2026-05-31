@@ -20,4 +20,13 @@ export default defineConfig([
       globals: globals.browser,
     },
   },
+  {
+    // Generated shadcn/ui primitives export a *Variants const beside the
+    // component; the react-refresh HMR rule flags this but it's the standard
+    // shadcn pattern and not a correctness issue.
+    files: ['src/components/ui/**/*.{ts,tsx}'],
+    rules: {
+      'react-refresh/only-export-components': 'off',
+    },
+  },
 ])
