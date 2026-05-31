@@ -48,7 +48,10 @@ export function createApp() {
       callback(null, !origin || allowedCorsOrigins.has(origin));
     },
   }));
-  app.use(express.json({ limit: '50mb' }));
+  // Bounds per-request memory. Generous for large prompts but far below the
+  // previous 50mb, which was a DoS surface now that the API can be exposed
+  // beyond loopback (Tailscale / ADMIN_ALLOW_REMOTE). Override with MAX_BODY_SIZE.
+  app.use(express.json({ limit: process.env.MAX_BODY_SIZE ?? '10mb' }));
 
   // Admin API. Two layers of protection (both no-ops only for the exempt
   // endpoints below): a loopback-only guard (override with ADMIN_ALLOW_REMOTE=

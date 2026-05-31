@@ -1,18 +1,18 @@
-import { describe, it, expect, beforeAll, vi } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import type { Express } from 'express';
+import type { Server } from 'node:http';
 import { createApp } from '../../app.js';
 import { initDb } from '../../db/index.js';
 import { issueToken } from '../../lib/adminAuth.js';
 import * as healthService from '../../services/health.js';
 
-async function request(app: Express, method: string, path: string, body?: any) {
-  const server = app.listen(0);
-  const addr = server.address() as any;
-  const url = `http://127.0.0.1:${addr.port}${path}`;
+let baseUrl = '';
+
+async function request(_app: Express, method: string, path: string, body?: any) {
   process.env.ADMIN_PASSWORD = 'test';
   const token = issueToken();
 
-  const res = await fetch(url, {
+  const res = await fetch(`${baseUrl}${path}`, {
     method,
     headers: {
       ...(body ? { 'Content-Type': 'application/json' } : {}),
@@ -22,18 +22,22 @@ async function request(app: Express, method: string, path: string, body?: any) {
   });
 
   const data = await res.json().catch(() => null);
-  server.close();
   return { status: res.status, body: data };
 }
 
 describe('Health API', () => {
   let app: Express;
+  let server: Server;
 
   beforeAll(() => {
     process.env.ENCRYPTION_KEY = '0'.repeat(64);
     initDb(':memory:');
     app = createApp();
+    server = app.listen(0);
+    baseUrl = `http://127.0.0.1:${(server.address() as any).port}`;
   });
+
+  afterAll(() => new Promise<void>((resolve) => server.close(() => resolve())));
 
   it('POST /api/health/check/:keyId checks a specific key', async () => {
     vi.spyOn(healthService, 'checkKeyHealth').mockResolvedValueOnce('healthy');

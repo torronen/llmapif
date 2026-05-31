@@ -1,21 +1,19 @@
-import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
 import type { Express } from 'express';
+import type { Server } from 'node:http';
 import { createApp } from '../../app.js';
 import { initDb, getDb, getUnifiedApiKey } from '../../db/index.js';
 
-async function request(app: Express, method: string, path: string, body?: any, headers: Record<string, string> = {}) {
-  const server = app.listen(0);
-  const addr = server.address() as any;
-  const url = `http://127.0.0.1:${addr.port}${path}`;
+let baseUrl = '';
 
-  const res = await fetch(url, {
+async function request(_app: Express, method: string, path: string, body?: any, headers: Record<string, string> = {}) {
+  const res = await fetch(`${baseUrl}${path}`, {
     method,
     headers: { ...(body ? { 'Content-Type': 'application/json' } : {}), ...headers },
     body: body ? JSON.stringify(body) : undefined,
   });
 
   const data = await res.text();
-  server.close();
 
   let json: any = null;
   try { json = JSON.parse(data); } catch {}
@@ -29,12 +27,17 @@ function authHeaders() {
 
 describe('Proxy tool-calling support', () => {
   let app: Express;
+  let server: Server;
 
   beforeAll(() => {
     process.env.ENCRYPTION_KEY = '0'.repeat(64);
     initDb(':memory:');
     app = createApp();
+    server = app.listen(0);
+    baseUrl = `http://127.0.0.1:${(server.address() as any).port}`;
   });
+
+  afterAll(() => new Promise<void>((resolve) => server.close(() => resolve())));
 
   beforeEach(async () => {
     const db = getDb();

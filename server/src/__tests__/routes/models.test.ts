@@ -1,21 +1,19 @@
 import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
 import type { Express } from 'express';
+import type { Server } from 'node:http';
 import { createApp } from '../../app.js';
 import { initDb } from '../../db/index.js';
 
-async function req(app: Express, method: string, path: string, body?: any, headers: Record<string, string> = {}) {
-  const server = app.listen(0);
-  const addr = server.address() as any;
-  const url = `http://127.0.0.1:${addr.port}${path}`;
+let baseUrl = '';
 
-  const res = await fetch(url, {
+async function req(_app: Express, method: string, path: string, body?: any, headers: Record<string, string> = {}) {
+  const res = await fetch(`${baseUrl}${path}`, {
     method,
     headers: { ...(body ? { 'Content-Type': 'application/json' } : {}), ...headers },
     body: body ? JSON.stringify(body) : undefined,
   });
 
   const data = await res.text();
-  server.close();
 
   let json: any = null;
   try { json = JSON.parse(data); } catch {}
@@ -25,6 +23,7 @@ async function req(app: Express, method: string, path: string, body?: any, heade
 
 describe('Models API', () => {
   let app: ReturnType<typeof createApp>;
+  let server: Server;
   let adminToken: string;
 
   beforeAll(() => {
@@ -32,10 +31,13 @@ describe('Models API', () => {
     initDb(':memory:');
     app = createApp();
     process.env.ADMIN_PASSWORD = 'test-password';
+    server = app.listen(0);
+    baseUrl = `http://127.0.0.1:${(server.address() as any).port}`;
   });
 
   afterAll(() => {
     delete process.env.ADMIN_PASSWORD;
+    return new Promise<void>((resolve) => server.close(() => resolve()));
   });
 
   beforeEach(async () => {

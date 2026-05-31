@@ -1,5 +1,6 @@
-import { describe, it, expect, beforeAll, vi } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import type { Express } from 'express';
+import type { Server } from 'node:http';
 import { createApp } from '../../app.js';
 import { initDb, getDb, getUnifiedApiKey } from '../../db/index.js';
 import { flushLogBatch } from '../../routes/proxy.js';
@@ -7,29 +8,27 @@ import { encrypt } from '../../lib/crypto.js';
 
 import http from 'http';
 
-async function request(app: Express, method: string, path: string, body?: any) {
-  const server = app.listen(0);
-  const addr = server.address() as any;
-  const url = `http://127.0.0.1:${addr.port}${path}`;
-  
-  return new Promise<any>((resolve) => {
-    const req = http.request(url, {
+let baseUrl = '';
+
+async function request(_app: Express, method: string, path: string, body?: any) {
+  return new Promise<any>((resolve, reject) => {
+    const req = http.request(`${baseUrl}${path}`, {
       method,
-      headers: { 
+      headers: {
         'Authorization': `Bearer ${getUnifiedApiKey()}`,
-        ...(body ? { 'Content-Type': 'application/json' } : {}) 
+        ...(body ? { 'Content-Type': 'application/json' } : {})
       }
     }, (res) => {
       let data = '';
       res.on('data', chunk => data += chunk);
       res.on('end', () => {
-        server.close();
         let parsed;
         try { parsed = JSON.parse(data); } catch { parsed = data; }
         resolve({ status: res.statusCode, body: parsed });
       });
     });
-    
+    req.on('error', reject);
+
     if (body) req.write(JSON.stringify(body));
     req.end();
   });
@@ -37,12 +36,17 @@ async function request(app: Express, method: string, path: string, body?: any) {
 
 describe('Proxy logging batch', () => {
   let app: Express;
+  let server: Server;
 
   beforeAll(async () => {
     process.env.ENCRYPTION_KEY = '0'.repeat(64);
     await initDb(':memory:');
     app = createApp();
+    server = app.listen(0);
+    baseUrl = `http://127.0.0.1:${(server.address() as any).port}`;
   });
+
+  afterAll(() => new Promise<void>((resolve) => server.close(() => resolve())));
 
   it('flushLogBatch flushes logs to DB and clears batch', async () => {
     const db = getDb();
