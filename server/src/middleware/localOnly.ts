@@ -23,6 +23,27 @@ function isLoopbackAddress(addr: string | undefined): boolean {
   );
 }
 
+function isTailscaleAddress(addr: string | undefined): boolean {
+  if (!addr) return false;
+  let ip = addr;
+  if (ip.startsWith('::ffff:')) {
+    ip = ip.substring(7);
+  }
+  // Tailscale IPv4 CGNAT (100.64.0.0/10)
+  const parts = ip.split('.');
+  if (parts.length === 4 && parts[0] === '100') {
+    const second = parseInt(parts[1], 10);
+    if (!isNaN(second) && second >= 64 && second <= 127) {
+      return true;
+    }
+  }
+  // Tailscale IPv6 ULA (fd7a:115c:a1e0::/48)
+  if (ip.toLowerCase().startsWith('fd7a:115c:a1e0:')) {
+    return true;
+  }
+  return false;
+}
+
 export function localOnly(req: Request, res: Response, next: NextFunction): void {
   if (process.env.ADMIN_ALLOW_REMOTE === 'true') {
     next();
@@ -34,11 +55,16 @@ export function localOnly(req: Request, res: Response, next: NextFunction): void
     return;
   }
 
+  if (process.env.ADMIN_ALLOW_TAILSCALE === 'true' && isTailscaleAddress(req.socket.remoteAddress)) {
+    next();
+    return;
+  }
+
   res.status(403).json({
     error: {
       message:
         'The admin API is restricted to local (loopback) access. ' +
-        'Set ADMIN_ALLOW_REMOTE=true only if you have placed your own authentication in front of the server.',
+        'Set ADMIN_ALLOW_REMOTE=true or ADMIN_ALLOW_TAILSCALE=true if you wish to expose it over the network (requires ADMIN_PASSWORD).',
       type: 'forbidden',
     },
   });

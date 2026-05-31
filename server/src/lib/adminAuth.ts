@@ -54,6 +54,12 @@ export function assertRemoteAccessIsSafe(): void {
       'Set ADMIN_PASSWORD to a strong value, or remove ADMIN_ALLOW_REMOTE to keep the admin API loopback-only.',
     );
   }
+  if (process.env.ADMIN_ALLOW_TAILSCALE === 'true' && !isAdminAuthEnabled()) {
+    throw new Error(
+      'ADMIN_ALLOW_TAILSCALE=true exposes the admin API to Tailscale users, but ADMIN_PASSWORD is not set. ' +
+      'Set ADMIN_PASSWORD to a strong value, or remove ADMIN_ALLOW_TAILSCALE.',
+    );
+  }
 }
 
 export function verifyToken(token: string | undefined, nowMs: number = Date.now()): boolean {
