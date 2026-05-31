@@ -26,43 +26,43 @@ describe('Analytics API', () => {
   let server: Server;
   let adminToken: string;
 
-  beforeAll(() => {
+  beforeAll(async () => {
     process.env.DEV_MODE = 'true';
-    initDb(':memory:');
+    await initDb(':memory:');
     app = createApp();
     process.env.ADMIN_PASSWORD = 'test-password';
     server = app.listen(0);
     baseUrl = `http://127.0.0.1:${(server.address() as any).port}`;
   });
 
-  afterAll(() => {
+  afterAll(async () => {
     delete process.env.ADMIN_PASSWORD;
     return new Promise<void>((resolve) => server.close(() => resolve()));
   });
 
   beforeEach(async () => {
     const db = getDb();
-    db.prepare('DELETE FROM requests').run();
-    db.prepare('DELETE FROM rate_limit_usage').run();
+    await db.prepare('DELETE FROM requests').run();
+    await db.prepare('DELETE FROM rate_limit_usage').run();
 
     const res = await req(app, 'POST', '/api/auth/login', { password: 'test-password' });
     adminToken = res.body.token;
   });
 
-  function insertMockRequests(db: ReturnType<typeof getDb>) {
+  async function insertMockRequests(db: ReturnType<typeof getDb>) {
     const now = Date.now();
-    const insert = db.prepare(`
+    const insert = await db.prepare(`
       INSERT INTO requests (platform, model_id, key_id, status, input_tokens, output_tokens, latency_ms, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, datetime(?, 'unixepoch'))
+      VALUES (?, ?, ?, ?, ?, ?, ?, to_timestamp(?))
     `);
-    insert.run('openai', 'gpt-4o', 1, 'success', 10, 20, 500, (now - 1000) / 1000);
-    insert.run('openai', 'gpt-4o', 1, 'success', 5, 10, 300, (now - 2000) / 1000);
-    insert.run('google', 'gemini-2.5-pro', 2, 'success', 50, 100, 1500, (now - 3000) / 1000);
-    insert.run('openai', 'gpt-4o', 1, 'error', 0, 0, 100, (now - 4000) / 1000);
+    await insert.run('openai', 'gpt-4o', 1, 'success', 10, 20, 500, (now - 1000) / 1000);
+    await insert.run('openai', 'gpt-4o', 1, 'success', 5, 10, 300, (now - 2000) / 1000);
+    await insert.run('google', 'gemini-2.5-pro', 2, 'success', 50, 100, 1500, (now - 3000) / 1000);
+    await insert.run('openai', 'gpt-4o', 1, 'error', 0, 0, 100, (now - 4000) / 1000);
   }
 
   it('should return analytics summary', async () => {
-    insertMockRequests(getDb());
+    await insertMockRequests(getDb());
 
     const res = await req(app, 'GET', '/api/analytics/summary', undefined, {
       Authorization: `Bearer ${adminToken}`
@@ -76,7 +76,7 @@ describe('Analytics API', () => {
   });
 
   it('should group analytics by model', async () => {
-    insertMockRequests(getDb());
+    await insertMockRequests(getDb());
 
     const res = await req(app, 'GET', '/api/analytics/by-model', undefined, {
       Authorization: `Bearer ${adminToken}`
@@ -94,9 +94,9 @@ describe('Analytics API', () => {
   it('should get error distribution', async () => {
     const db = getDb();
     const now = Date.now();
-    db.prepare(`
+    await db.prepare(`
       INSERT INTO requests (platform, model_id, key_id, status, error, created_at)
-      VALUES (?, ?, ?, ?, ?, datetime(?, 'unixepoch'))
+      VALUES (?, ?, ?, ?, ?, to_timestamp(?))
     `).run('openai', 'gpt-4o', 1, 'error', 'api error 429: rate limit exceeded', (now - 1000) / 1000);
 
     const res = await req(app, 'GET', '/api/analytics/error-distribution', undefined, {
@@ -109,7 +109,7 @@ describe('Analytics API', () => {
   });
 
   it('should group analytics by platform', async () => {
-    insertMockRequests(getDb());
+    await insertMockRequests(getDb());
     const res = await req(app, 'GET', '/api/analytics/by-platform', undefined, {
       Authorization: `Bearer ${adminToken}`
     });
@@ -122,7 +122,7 @@ describe('Analytics API', () => {
   });
 
   it('should return timeline data', async () => {
-    insertMockRequests(getDb());
+    await insertMockRequests(getDb());
     const res = await req(app, 'GET', '/api/analytics/timeline?range=7d&interval=day', undefined, {
       Authorization: `Bearer ${adminToken}`
     });
@@ -133,7 +133,7 @@ describe('Analytics API', () => {
   });
 
   it('should return recent errors', async () => {
-    insertMockRequests(getDb());
+    await insertMockRequests(getDb());
     const res = await req(app, 'GET', '/api/analytics/errors', undefined, {
       Authorization: `Bearer ${adminToken}`
     });

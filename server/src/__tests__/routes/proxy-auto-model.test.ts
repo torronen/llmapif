@@ -29,9 +29,9 @@ describe('Virtual "auto" model', () => {
   let app: Express;
   let server: Server;
 
-  beforeAll(() => {
+  beforeAll(async () => {
     process.env.ENCRYPTION_KEY = '0'.repeat(64);
-    initDb(':memory:');
+    await initDb(':memory:');
     app = createApp();
     server = app.listen(0);
     baseUrl = `http://127.0.0.1:${(server.address() as any).port}`;
@@ -41,8 +41,8 @@ describe('Virtual "auto" model', () => {
 
   beforeEach(async () => {
     const db = getDb();
-    db.prepare('DELETE FROM api_keys').run();
-    db.prepare('DELETE FROM requests').run();
+    await db.prepare('DELETE FROM api_keys').run();
+    await db.prepare('DELETE FROM requests').run();
 
     const addKey = await request(app, 'POST', '/api/keys', {
       platform: 'groq',
@@ -52,7 +52,7 @@ describe('Virtual "auto" model', () => {
     expect(addKey.status).toBe(201);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.restoreAllMocks();
   });
 

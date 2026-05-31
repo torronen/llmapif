@@ -4,11 +4,11 @@ import { CloudflareProvider } from '../../providers/cloudflare.js';
 describe('CloudflareProvider', () => {
   let provider: CloudflareProvider;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     provider = new CloudflareProvider();
   });
 
-  it('should have correct platform and name', () => {
+  it('should have correct platform and name', async () => {
     expect(provider.platform).toBe('cloudflare');
     expect(provider.name).toBe('Cloudflare Workers AI');
   });

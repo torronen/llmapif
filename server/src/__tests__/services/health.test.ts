@@ -5,12 +5,12 @@ import { encrypt } from '../../lib/crypto.js';
 import * as providers from '../../providers/index.js';
 
 describe('Health Checker Service', () => {
-  beforeAll(() => {
+  beforeAll(async () => {
     process.env.ENCRYPTION_KEY = '0'.repeat(64);
-    initDb(':memory:');
+    await initDb(':memory:');
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     stopHealthChecker();
     vi.restoreAllMocks();
   });
@@ -23,9 +23,10 @@ describe('Health Checker Service', () => {
   it('should validate a healthy key', async () => {
     const { encrypted, iv, authTag } = encrypt('sk-test-123');
     const db = getDb();
-    const result = db.prepare(`
+    const result = await db.prepare(`
       INSERT INTO api_keys (platform, label, encrypted_key, iv, auth_tag, status, enabled)
       VALUES ('openai', 'test', ?, ?, ?, 'unknown', 1)
+      RETURNING id
     `).run(encrypted, iv, authTag);
     const keyId = result.lastInsertRowid as number;
 
@@ -36,7 +37,7 @@ describe('Health Checker Service', () => {
     expect(status).toBe('healthy');
     expect(mockProvider.validateKey).toHaveBeenCalledWith('sk-test-123');
 
-    const updated = db.prepare('SELECT status, enabled FROM api_keys WHERE id = ?').get(keyId) as any;
+    const updated = await db.prepare('SELECT status, enabled FROM api_keys WHERE id = ?').get(keyId) as any;
     expect(updated.status).toBe('healthy');
     expect(updated.enabled).toBe(1);
   });
@@ -44,9 +45,10 @@ describe('Health Checker Service', () => {
   it('should auto-disable key after 3 consecutive failures', async () => {
     const { encrypted, iv, authTag } = encrypt('sk-test-bad');
     const db = getDb();
-    const result = db.prepare(`
+    const result = await db.prepare(`
       INSERT INTO api_keys (platform, label, encrypted_key, iv, auth_tag, status, enabled)
       VALUES ('openai', 'bad', ?, ?, ?, 'unknown', 1)
+      RETURNING id
     `).run(encrypted, iv, authTag);
     const keyId = result.lastInsertRowid as number;
 
@@ -56,27 +58,28 @@ describe('Health Checker Service', () => {
 
     // 1st failure
     await checkKeyHealth(keyId);
-    let updated = db.prepare('SELECT status, enabled FROM api_keys WHERE id = ?').get(keyId) as any;
+    let updated = await db.prepare('SELECT status, enabled FROM api_keys WHERE id = ?').get(keyId) as any;
     expect(updated.status).toBe('invalid');
     expect(updated.enabled).toBe(1);
 
     // 2nd failure
     await checkKeyHealth(keyId);
-    updated = db.prepare('SELECT status, enabled FROM api_keys WHERE id = ?').get(keyId) as any;
+    updated = await db.prepare('SELECT status, enabled FROM api_keys WHERE id = ?').get(keyId) as any;
     expect(updated.enabled).toBe(1);
 
     // 3rd failure
     await checkKeyHealth(keyId);
-    updated = db.prepare('SELECT status, enabled FROM api_keys WHERE id = ?').get(keyId) as any;
+    updated = await db.prepare('SELECT status, enabled FROM api_keys WHERE id = ?').get(keyId) as any;
     expect(updated.enabled).toBe(0); // Disabled!
   });
 
   it('should handle transport errors without disabling', async () => {
     const { encrypted, iv, authTag } = encrypt('sk-test-transport');
     const db = getDb();
-    const result = db.prepare(`
+    const result = await db.prepare(`
       INSERT INTO api_keys (platform, label, encrypted_key, iv, auth_tag, status, enabled)
       VALUES ('openai', 'trans', ?, ?, ?, 'unknown', 1)
+      RETURNING id
     `).run(encrypted, iv, authTag);
     const keyId = result.lastInsertRowid as number;
 
@@ -91,7 +94,7 @@ describe('Health Checker Service', () => {
     }
 
     // Key should still be enabled
-    const updated = db.prepare('SELECT status, enabled FROM api_keys WHERE id = ?').get(keyId) as any;
+    const updated = await db.prepare('SELECT status, enabled FROM api_keys WHERE id = ?').get(keyId) as any;
     expect(updated.status).toBe('error');
     expect(updated.enabled).toBe(1);
     consoleSpy.mockRestore();
@@ -107,7 +110,7 @@ describe('Health Checker Service', () => {
     expect(mockProvider.validateKey).toHaveBeenCalled();
   });
 
-  it('startHealthChecker should run checks and stopHealthChecker should clear interval', () => {
+  it('startHealthChecker should run checks and stopHealthChecker should clear interval', async () => {
     vi.spyOn(console, 'log').mockImplementation(() => {});
     const mockProvider = { validateKey: vi.fn().mockResolvedValue(true) } as any;
     vi.spyOn(providers, 'getProvider').mockReturnValue(mockProvider);

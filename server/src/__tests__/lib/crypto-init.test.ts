@@ -1,11 +1,25 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import Database from 'better-sqlite3';
 import { initEncryptionKey, encrypt, decrypt } from '../../lib/crypto.js';
+import type { PostgresDatabase } from '../../db/index.js';
 
-function freshDb(): Database.Database {
-  const db = new Database(':memory:');
-  db.exec(`CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
-  return db;
+class MemorySettingsDb {
+  settings = new Map<string, string>();
+
+  async one<T = any>(sql: string): Promise<T | undefined> {
+    if (!sql.includes("key = 'encryption_key'")) return undefined;
+    const value = this.settings.get('encryption_key');
+    return value ? ({ value } as T) : undefined;
+  }
+
+  async run(sql: string, params: unknown[]): Promise<{ changes: number }> {
+    if (!sql.includes('INSERT INTO settings')) return { changes: 0 };
+    this.settings.set('encryption_key', String(params[0]));
+    return { changes: 1 };
+  }
+}
+
+function freshDb(): PostgresDatabase {
+  return new MemorySettingsDb() as unknown as PostgresDatabase;
 }
 
 const ORIGINAL_NODE_ENV = process.env.NODE_ENV;
@@ -20,88 +34,70 @@ function restoreEnv() {
   }
 }
 
-describe('initEncryptionKey — input validation', () => {
-  beforeEach(() => {
+describe('initEncryptionKey input validation', () => {
+  beforeEach(async () => {
     restoreEnv();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     restoreEnv();
   });
 
-  it('accepts a valid 64-char hex env key', () => {
+  it('accepts a valid 64-char hex env key', async () => {
     process.env.ENCRYPTION_KEY = 'a'.repeat(64);
-    const db = freshDb();
-    expect(() => initEncryptionKey(db)).not.toThrow();
-    // Round-trip a value to confirm the key actually works.
+    await expect(initEncryptionKey(freshDb())).resolves.toBeUndefined();
+
     const enc = encrypt('hello');
     expect(decrypt(enc.encrypted, enc.iv, enc.authTag)).toBe('hello');
   });
 
-  it('throws on too-short env key (typo guard)', () => {
+  it('throws on too-short env key', async () => {
     process.env.ENCRYPTION_KEY = 'abc';
-    const db = freshDb();
-    expect(() => initEncryptionKey(db)).toThrow(/Invalid ENCRYPTION_KEY \(env\).+expected 64 hex chars/);
+    await expect(initEncryptionKey(freshDb())).rejects.toThrow(/Invalid ENCRYPTION_KEY \(env\).+expected 64 hex chars/);
   });
 
-  it('throws on too-long env key', () => {
+  it('throws on too-long env key', async () => {
     process.env.ENCRYPTION_KEY = 'a'.repeat(80);
-    const db = freshDb();
-    expect(() => initEncryptionKey(db)).toThrow(/Invalid ENCRYPTION_KEY \(env\)/);
+    await expect(initEncryptionKey(freshDb())).rejects.toThrow(/Invalid ENCRYPTION_KEY \(env\)/);
   });
 
-  it('throws on non-hex env key of correct length', () => {
-    process.env.ENCRYPTION_KEY = 'g'.repeat(64); // g is not hex
-    const db = freshDb();
-    expect(() => initEncryptionKey(db)).toThrow(/Invalid ENCRYPTION_KEY \(env\)/);
+  it('throws on non-hex env key of correct length', async () => {
+    process.env.ENCRYPTION_KEY = 'g'.repeat(64);
+    await expect(initEncryptionKey(freshDb())).rejects.toThrow(/Invalid ENCRYPTION_KEY \(env\)/);
   });
 
-  it('requires ENCRYPTION_KEY when dev fallback is not explicitly enabled', () => {
-    const db = freshDb();
-    expect(() => initEncryptionKey(db)).toThrow(/ENCRYPTION_KEY is required/);
-    const row = db.prepare("SELECT value FROM settings WHERE key = 'encryption_key'").get();
-    expect(row).toBeUndefined();
+  it('requires ENCRYPTION_KEY when dev fallback is not explicitly enabled', async () => {
+    const db = freshDb() as unknown as MemorySettingsDb;
+    await expect(initEncryptionKey(db as unknown as PostgresDatabase)).rejects.toThrow(/ENCRYPTION_KEY is required/);
+    expect(db.settings.get('encryption_key')).toBeUndefined();
   });
 
-  it('does not load a DB-stored fallback key when dev fallback is disabled', () => {
-    const db = freshDb();
-    db.prepare("INSERT INTO settings (key, value) VALUES ('encryption_key', ?)").run('b'.repeat(64));
-    expect(() => initEncryptionKey(db)).toThrow(/ENCRYPTION_KEY is required/);
+  it('does not load a DB-stored fallback key when dev fallback is disabled', async () => {
+    const db = freshDb() as unknown as MemorySettingsDb;
+    db.settings.set('encryption_key', 'b'.repeat(64));
+    await expect(initEncryptionKey(db as unknown as PostgresDatabase)).rejects.toThrow(/ENCRYPTION_KEY is required/);
   });
 
-  it('requires ENCRYPTION_KEY in production even when DEV_MODE is set', () => {
+  it('requires ENCRYPTION_KEY in production even when DEV_MODE is set', async () => {
     process.env.DEV_MODE = 'true';
     process.env.NODE_ENV = 'production';
-    const db = freshDb();
-    expect(() => initEncryptionKey(db)).toThrow(/ENCRYPTION_KEY is required/);
-    const row = db.prepare("SELECT value FROM settings WHERE key = 'encryption_key'").get();
-    expect(row).toBeUndefined();
+    await expect(initEncryptionKey(freshDb())).rejects.toThrow(/ENCRYPTION_KEY is required/);
   });
 
-  it('still treats the placeholder as "not set" and allows explicit dev fallback generation', () => {
+  it('allows explicit dev fallback generation', async () => {
     process.env.ENCRYPTION_KEY = 'your-64-char-hex-key-here';
     process.env.DEV_MODE = 'true';
     process.env.NODE_ENV = 'test';
-    const db = freshDb();
-    expect(() => initEncryptionKey(db)).not.toThrow();
-    const row = db.prepare("SELECT value FROM settings WHERE key = 'encryption_key'").get() as { value: string };
-    expect(row.value).toMatch(/^[0-9a-f]{64}$/);
+    const db = freshDb() as unknown as MemorySettingsDb;
+    await expect(initEncryptionKey(db as unknown as PostgresDatabase)).resolves.toBeUndefined();
+    expect(db.settings.get('encryption_key')).toMatch(/^[0-9a-f]{64}$/);
   });
 
-  it('throws on a corrupted DB-stored key', () => {
+  it('throws on a corrupted DB-stored key', async () => {
     process.env.DEV_MODE = 'true';
     process.env.NODE_ENV = 'test';
-    const db = freshDb();
-    db.prepare("INSERT INTO settings (key, value) VALUES ('encryption_key', ?)").run('not-hex');
-    expect(() => initEncryptionKey(db)).toThrow(/Invalid ENCRYPTION_KEY \(db\)/);
-  });
-
-  it('generates a fresh key on a virgin DB and persists it only in explicit dev fallback mode', () => {
-    process.env.DEV_MODE = 'true';
-    process.env.NODE_ENV = 'test';
-    const db = freshDb();
-    initEncryptionKey(db);
-    const row = db.prepare("SELECT value FROM settings WHERE key = 'encryption_key'").get() as { value: string };
-    expect(row.value).toMatch(/^[0-9a-f]{64}$/);
+    const db = freshDb() as unknown as MemorySettingsDb;
+    db.settings.set('encryption_key', 'not-hex');
+    await expect(initEncryptionKey(db as unknown as PostgresDatabase)).rejects.toThrow(/Invalid ENCRYPTION_KEY \(db\)/);
   });
 });

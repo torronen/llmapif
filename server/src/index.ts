@@ -1,6 +1,6 @@
 import './env.js';
 import { createApp } from './app.js';
-import { initDb, getDb } from './db/index.js';
+import { closeDb, initDb } from './db/index.js';
 import { startHealthChecker } from './services/health.js';
 import { assertRemoteAccessIsSafe, isAdminAuthEnabled } from './lib/adminAuth.js';
 import { flushLogBatch } from './routes/proxy.js';
@@ -18,7 +18,7 @@ async function main() {
   // Fail fast on an unsafe network/auth combination before doing any work.
   assertRemoteAccessIsSafe();
 
-  initDb();
+  await initDb();
   const app = createApp();
 
   const server = http.createServer(app);
@@ -38,11 +38,11 @@ async function main() {
 
   const shutdown = () => {
     console.log('Shutting down server...');
-    server.close(() => {
+    server.close(async () => {
       console.log('HTTP server closed.');
       try {
-        flushLogBatch();
-        getDb().close();
+        await flushLogBatch();
+        await closeDb();
         console.log('Database connection closed.');
       } catch (err) {
         console.error('Error closing database:', err);

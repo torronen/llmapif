@@ -4,11 +4,11 @@ import { CohereProvider } from '../../providers/cohere.js';
 describe('CohereProvider', () => {
   let provider: CohereProvider;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     provider = new CohereProvider();
   });
 
-  it('should have correct platform and name', () => {
+  it('should have correct platform and name', async () => {
     expect(provider.platform).toBe('cohere');
     expect(provider.name).toBe('Cohere');
   });

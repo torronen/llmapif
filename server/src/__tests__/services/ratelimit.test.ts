@@ -1,5 +1,5 @@
-import fs from 'fs';
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { closeDb, initDb } from '../../db/index.js';
 import {
   canMakeRequest,
   canUseTokens,
@@ -9,80 +9,76 @@ import {
   getNextCooldownDuration,
 } from '../../services/ratelimit.js';
 
-function removeDbFile(dbPath: string) {
-  for (const suffix of ['', '-shm', '-wal']) {
-    try {
-      fs.unlinkSync(`${dbPath}${suffix}`);
-    } catch {
-      // Best-effort cleanup for temp SQLite files.
-    }
-  }
-}
-
 describe('Rate Limiter', () => {
   // Use unique identifiers per test to avoid cross-contamination
   let testId: number;
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    process.env.ENCRYPTION_KEY = '0'.repeat(64);
+    await initDb(':memory:');
     testId = Math.floor(Math.random() * 1_000_000);
   });
 
+  afterEach(async () => {
+    await closeDb();
+  });
+
   describe('canMakeRequest', () => {
-    it('should allow request when under RPM limit', () => {
-      expect(canMakeRequest('groq', 'llama-70b', testId, {
+    it('should allow request when under RPM limit', async () => {
+      expect(await canMakeRequest('groq', 'llama-70b', testId, {
         rpm: 30, rpd: null, tpm: null, tpd: null,
       })).toBe(true);
     });
 
-    it('should deny request when RPM limit reached', () => {
+    it('should deny request when RPM limit reached', async () => {
       const limits = { rpm: 2, rpd: null, tpm: null, tpd: null };
-      recordRequest('groq', 'llama-70b', testId);
-      recordRequest('groq', 'llama-70b', testId);
-      expect(canMakeRequest('groq', 'llama-70b', testId, limits)).toBe(false);
+      await recordRequest('groq', 'llama-70b', testId);
+      await recordRequest('groq', 'llama-70b', testId);
+      expect(await canMakeRequest('groq', 'llama-70b', testId, limits)).toBe(false);
     });
 
-    it('should deny request when RPD limit reached', () => {
+    it('should deny request when RPD limit reached', async () => {
       const limits = { rpm: null, rpd: 1, tpm: null, tpd: null };
-      recordRequest('google', 'gemini', testId);
-      expect(canMakeRequest('google', 'gemini', testId, limits)).toBe(false);
+      await recordRequest('google', 'gemini', testId);
+      expect(await canMakeRequest('google', 'gemini', testId, limits)).toBe(false);
     });
 
-    it('should allow request when limits are null (unlimited)', () => {
-      expect(canMakeRequest('nvidia', 'nemotron', testId, {
+    it('should allow request when limits are null (unlimited)', async () => {
+      expect(await canMakeRequest('nvidia', 'nemotron', testId, {
         rpm: null, rpd: null, tpm: null, tpd: null,
       })).toBe(true);
     });
   });
 
   describe('canUseTokens', () => {
-    it('should allow tokens when under TPM limit', () => {
-      expect(canUseTokens('groq', 'llama-70b', testId, 500, {
+    it('should allow tokens when under TPM limit', async () => {
+      expect(await canUseTokens('groq', 'llama-70b', testId, 500, {
         tpm: 6000, tpd: null,
       })).toBe(true);
     });
 
-    it('should deny tokens when TPM limit would be exceeded', () => {
-      recordTokens('cerebras', 'qwen3', testId, 50000);
-      expect(canUseTokens('cerebras', 'qwen3', testId, 20000, {
+    it('should deny tokens when TPM limit would be exceeded', async () => {
+      await recordTokens('cerebras', 'qwen3', testId, 50000);
+      expect(await canUseTokens('cerebras', 'qwen3', testId, 20000, {
         tpm: 60000, tpd: null,
       })).toBe(false);
     });
 
-    it('should allow when limit is null', () => {
-      expect(canUseTokens('nvidia', 'nemotron', testId, 100000, {
+    it('should allow when limit is null', async () => {
+      expect(await canUseTokens('nvidia', 'nemotron', testId, 100000, {
         tpm: null, tpd: null,
       })).toBe(true);
     });
   });
 
   describe('getRateLimitStatus', () => {
-    it('should return current usage counts', () => {
+    it('should return current usage counts', async () => {
       const limits = { rpm: 30, rpd: 1000, tpm: 6000, tpd: null };
-      recordRequest('groq', 'test-model', testId);
-      recordRequest('groq', 'test-model', testId);
-      recordTokens('groq', 'test-model', testId, 500);
+      await recordRequest('groq', 'test-model', testId);
+      await recordRequest('groq', 'test-model', testId);
+      await recordTokens('groq', 'test-model', testId, 500);
 
-      const status = getRateLimitStatus('groq', 'test-model', testId, limits);
+      const status = await getRateLimitStatus('groq', 'test-model', testId, limits);
       expect(status.rpm.used).toBe(2);
       expect(status.rpm.limit).toBe(30);
       expect(status.rpd.used).toBe(2);
@@ -91,7 +87,7 @@ describe('Rate Limiter', () => {
   });
 
   describe('escalating cooldown', () => {
-    it('escalates the 2nd/3rd/4th hit within 24h to 10m / 1h / 24h', () => {
+    it('escalates the 2nd/3rd/4th hit within 24h to 10m / 1h / 24h', async () => {
       const id = Math.floor(Math.random() * 1_000_000);
       const args = ['cerebras', `escalating-model-${id}`, id] as const;
       // 1st: 2 minutes
@@ -116,40 +112,21 @@ describe('Rate Limiter', () => {
   });
 
   describe('persistent state', () => {
-    it('preserves per-key usage and cooldowns after the limiter module reloads', async () => {
-      process.env.ENCRYPTION_KEY = '0'.repeat(64);
-      const dbPath = `/tmp/freeapi-ratelimit-${Date.now()}-${Math.random()}.db`;
+    it('persists per-key usage and cooldowns in Postgres', async () => {
       const keyId = 4242;
-      let db: { close: () => void } | undefined;
 
-      try {
-        vi.resetModules();
-        const dbModule = await import('../../db/index.js');
-        db = dbModule.initDb(dbPath);
-        const limiter = await import('../../services/ratelimit.js');
+      await recordRequest('groq', 'persistent-model', keyId);
+      await recordTokens('groq', 'persistent-model', keyId, 950);
+      await import('../../services/ratelimit.js').then(m => m.setCooldown('groq', 'persistent-model', keyId, 60_000));
 
-        limiter.recordRequest('groq', 'persistent-model', keyId);
-        limiter.recordTokens('groq', 'persistent-model', keyId, 950);
-        limiter.setCooldown('groq', 'persistent-model', keyId, 60_000);
-        db.close();
-        db = undefined;
-
-        vi.resetModules();
-        const dbModuleAfterReload = await import('../../db/index.js');
-        db = dbModuleAfterReload.initDb(dbPath);
-        const limiterAfterReload = await import('../../services/ratelimit.js');
-
-        expect(limiterAfterReload.canMakeRequest('groq', 'persistent-model', keyId, {
-          rpm: null, rpd: 1, tpm: null, tpd: null,
-        })).toBe(false);
-        expect(limiterAfterReload.canUseTokens('groq', 'persistent-model', keyId, 100, {
-          tpm: null, tpd: 1000,
-        })).toBe(false);
-        expect(limiterAfterReload.isOnCooldown('groq', 'persistent-model', keyId)).toBe(true);
-      } finally {
-        db?.close();
-        removeDbFile(dbPath);
-      }
+      expect(await canMakeRequest('groq', 'persistent-model', keyId, {
+        rpm: null, rpd: 1, tpm: null, tpd: null,
+      })).toBe(false);
+      expect(await canUseTokens('groq', 'persistent-model', keyId, 100, {
+        tpm: null, tpd: 1000,
+      })).toBe(false);
+      const { isOnCooldown } = await import('../../services/ratelimit.js');
+      expect(await isOnCooldown('groq', 'persistent-model', keyId)).toBe(true);
     });
   });
 });

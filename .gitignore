@@ -8,6 +8,9 @@ server/data/
 .env
 .env.local
 .DS_Store
+.secrets/
+config/*.json
+!config/*.example.json
 
 # Personal deployment scripts (contain keys/credentials — kept local)
 deploy-pi.sh

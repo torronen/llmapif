@@ -7,9 +7,9 @@ import { getAllPenalties } from '../services/router.js';
 export const fallbackRouter = Router();
 
 // Get fallback chain (with dynamic penalties)
-fallbackRouter.get('/', (_req: Request, res: Response) => {
+fallbackRouter.get('/', async (_req: Request, res: Response) => {
   const db = getDb();
-  const rows = db.prepare(`
+  const rows = await db.many<any>(`
     SELECT fc.model_db_id, fc.priority, fc.enabled,
            m.platform, m.model_id, m.display_name, m.intelligence_rank,
            m.speed_rank, m.size_label, m.rpm_limit, m.rpd_limit,
@@ -17,14 +17,14 @@ fallbackRouter.get('/', (_req: Request, res: Response) => {
     FROM fallback_config fc
     JOIN models m ON m.id = fc.model_db_id
     ORDER BY fc.priority ASC
-  `).all() as any[];
+  `);
 
   // Count enabled keys per platform
-  const keyCounts = db.prepare(`
+  const keyCounts = await db.many<{ platform: string; count: number }>(`
     SELECT platform, COUNT(*) as count
     FROM api_keys WHERE enabled = 1
     GROUP BY platform
-  `).all() as { platform: string; count: number }[];
+  `);
   const keyCountMap = new Map(keyCounts.map(k => [k.platform, k.count]));
 
   // Get current dynamic penalties
@@ -61,7 +61,7 @@ const updateSchema = z.array(z.object({
 }));
 
 // Update fallback chain (full replace)
-fallbackRouter.put('/', (req: Request, res: Response) => {
+fallbackRouter.put('/', async (req: Request, res: Response) => {
   const parsed = updateSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: { message: parsed.error.errors.map(e => e.message).join(', ') } });
@@ -69,16 +69,13 @@ fallbackRouter.put('/', (req: Request, res: Response) => {
   }
 
   const db = getDb();
-  const update = db.prepare(`
-    UPDATE fallback_config SET priority = ?, enabled = ? WHERE model_db_id = ?
-  `);
-
-  const updateAll = db.transaction(() => {
+  await db.transaction(async () => {
     for (const entry of parsed.data) {
-      update.run(entry.priority, entry.enabled ? 1 : 0, entry.modelDbId);
+      await db.run(`
+        UPDATE fallback_config SET priority = ?, enabled = ? WHERE model_db_id = ?
+      `, [entry.priority, entry.enabled ? 1 : 0, entry.modelDbId]);
     }
   });
-  updateAll();
 
   res.json({ success: true });
 });
@@ -91,7 +88,7 @@ const SORT_PRESETS: Record<string, string> = {
   budget: "CASE m.monthly_token_budget WHEN '~120M' THEN 1 WHEN '~50-100M' THEN 2 WHEN '~30M' THEN 3 WHEN '~18-45M' THEN 4 WHEN '~18M' THEN 5 WHEN '~15M' THEN 6 WHEN '~12M' THEN 7 WHEN '~6M' THEN 8 WHEN '~5-10M' THEN 9 WHEN '~4M' THEN 10 ELSE 11 END ASC",
 };
 
-fallbackRouter.post('/sort/:preset', (req: Request, res: Response) => {
+fallbackRouter.post('/sort/:preset', async (req: Request, res: Response) => {
   const preset = String(req.params.preset);
   const orderBy = SORT_PRESETS[preset];
   if (!orderBy) {
@@ -100,40 +97,38 @@ fallbackRouter.post('/sort/:preset', (req: Request, res: Response) => {
   }
 
   const db = getDb();
-  const models = db.prepare(`SELECT m.id FROM models m ORDER BY ${orderBy}`).all() as { id: number }[];
+  const models = await db.many<{ id: number }>(`SELECT m.id FROM models m ORDER BY ${orderBy}`);
 
-  const update = db.prepare('UPDATE fallback_config SET priority = ? WHERE model_db_id = ?');
-  const reorder = db.transaction(() => {
+  await db.transaction(async () => {
     for (let i = 0; i < models.length; i++) {
-      update.run(i + 1, models[i].id);
+      await db.run('UPDATE fallback_config SET priority = ? WHERE model_db_id = ?', [i + 1, models[i].id]);
     }
   });
-  reorder();
 
   res.json({ success: true, preset });
 });
 
 // Token usage per model for the stacked bar
-fallbackRouter.get('/token-usage', (_req: Request, res: Response) => {
+fallbackRouter.get('/token-usage', async (_req: Request, res: Response) => {
   const db = getDb();
 
   // Get platforms that have enabled keys
-  const platforms = db.prepare(`
+  const platforms = await db.many<{ platform: string }>(`
     SELECT DISTINCT ak.platform
     FROM api_keys ak
     WHERE ak.enabled = 1
-  `).all() as { platform: string }[];
+  `);
   const platformSet = new Set(platforms.map(p => p.platform));
 
   // Get monthly budget per model, ordered by fallback priority
-  const models = db.prepare(`
+  const models = await db.many<{ platform: string; model_id: string; display_name: string; monthly_token_budget: string; priority: number }>(`
     SELECT m.platform, m.model_id, m.display_name, m.monthly_token_budget,
            fc.priority
     FROM models m
     JOIN fallback_config fc ON fc.model_db_id = m.id
     WHERE m.enabled = 1
     ORDER BY fc.priority ASC
-  `).all() as { platform: string; model_id: string; display_name: string; monthly_token_budget: string; priority: number }[];
+  `);
 
   function parseBudget(s: string): number {
     const m = s.match(/~?([\d.]+)(?:-([\d.]+))?([MK])?/);
@@ -155,16 +150,16 @@ fallbackRouter.get('/token-usage', (_req: Request, res: Response) => {
   const totalBudget = modelBudgets.reduce((s, m) => s + m.budget, 0);
 
   // Tokens used this month
-  const usage = db.prepare(`
+  const usage = await db.one<{ total_used: number }>(`
     SELECT
       COALESCE(SUM(input_tokens + output_tokens), 0) as total_used
     FROM requests
-    WHERE created_at >= datetime('now', 'start of month')
-  `).get() as { total_used: number };
+    WHERE created_at >= date_trunc('month', CURRENT_TIMESTAMP)
+  `);
 
   res.json({
     totalBudget,
-    totalUsed: usage.total_used,
+    totalUsed: usage?.total_used ?? 0,
     models: modelBudgets,
   });
 });

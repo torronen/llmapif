@@ -76,9 +76,9 @@ function setStickyModel(messages: ChatMessage[], modelDbId: number) {
 }
 
 // OpenAI-compatible /models endpoint (used by Hermes for metadata)
-proxyRouter.get('/models', (_req: Request, res: Response) => {
+proxyRouter.get('/models', async (_req: Request, res: Response) => {
   const db = getDb();
-  const models = db.prepare('SELECT platform, model_id, display_name, context_window FROM models WHERE enabled = 1 ORDER BY intelligence_rank').all() as any[];
+  const models = await db.many('SELECT platform, model_id, display_name, context_window FROM models WHERE enabled = 1 ORDER BY intelligence_rank');
   res.json({
     object: 'list',
     data: [
@@ -310,11 +310,11 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
     preferredModel = getStickyModel(messages);
   } else if (requestedModel) {
     const db = getDb();
-    const enabled = db.prepare('SELECT id FROM models WHERE model_id = ? AND enabled = 1').get(requestedModel) as { id: number } | undefined;
+    const enabled = await db.one<{ id: number }>('SELECT id FROM models WHERE model_id = ? AND enabled = 1', [requestedModel]);
     if (enabled) {
       preferredModel = enabled.id;
     } else {
-      const disabled = db.prepare('SELECT id FROM models WHERE model_id = ?').get(requestedModel) as { id: number } | undefined;
+      const disabled = await db.one<{ id: number }>('SELECT id FROM models WHERE model_id = ?', [requestedModel]);
       const reason = disabled ? 'is disabled' : 'is not in the catalog';
       res.status(400).json({
         error: {
@@ -338,13 +338,12 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
     try {
       // Execute routing and limit reservations inside an IMMEDIATE transaction
       // to ensure perfect consistency of rate limit counters under high concurrency.
-      const tx = getDb().transaction(() => {
-        const r = routeRequest(estimatedTotal, skipKeys.size > 0 ? skipKeys : undefined, preferredModel, strategy);
-        recordRequest(r.platform, r.modelId, r.keyId);
-        recordTokens(r.platform, r.modelId, r.keyId, estimatedTotal);
+      route = await getDb().transaction(async () => {
+        const r = await routeRequest(estimatedTotal, skipKeys.size > 0 ? skipKeys : undefined, preferredModel, strategy);
+        await recordRequest(r.platform, r.modelId, r.keyId);
+        await recordTokens(r.platform, r.modelId, r.keyId, estimatedTotal);
         return r;
       });
-      route = tx.immediate();
     } catch (err: any) {
       // No more models available
       if (lastError) {
@@ -399,11 +398,11 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
 
           const finalTokens = estimatedInputTokens + totalOutputTokens;
           if (finalTokens !== estimatedTotal) {
-            recordTokens(route.platform, route.modelId, route.keyId, finalTokens - estimatedTotal);
+            await recordTokens(route.platform, route.modelId, route.keyId, finalTokens - estimatedTotal);
           }
           recordSuccess(route.modelDbId);
           setStickyModel(messages, route.modelDbId);
-          logRequest(route.platform, route.modelId, route.keyId, 'success', estimatedInputTokens, totalOutputTokens, Date.now() - start, null);
+          await logRequest(route.platform, route.modelId, route.keyId, 'success', estimatedInputTokens, totalOutputTokens, Date.now() - start, null);
           return;
         } catch (streamErr: any) {
           if (streamStarted) {
@@ -415,7 +414,7 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
             const payload = { error: { message: `Provider error (${route.displayName}): stream interrupted`, type: 'stream_error' } };
             try { res.write(`data: ${JSON.stringify(payload)}\n\n`); } catch { /* socket gone */ }
             try { res.write('data: [DONE]\n\n'); res.end(); } catch { /* socket gone */ }
-            logRequest(route.platform, route.modelId, route.keyId, 'error', estimatedInputTokens, totalOutputTokens, Date.now() - start, streamErr.message);
+            await logRequest(route.platform, route.modelId, route.keyId, 'error', estimatedInputTokens, totalOutputTokens, Date.now() - start, streamErr.message);
             return;
           }
           // Pre-stream error — bubble to outer retry/502 handler.
@@ -429,7 +428,7 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
 
         const totalTokens = result.usage?.total_tokens ?? 0;
         if (totalTokens !== estimatedTotal) {
-          recordTokens(route.platform, route.modelId, route.keyId, totalTokens - estimatedTotal);
+          await recordTokens(route.platform, route.modelId, route.keyId, totalTokens - estimatedTotal);
         }
         recordSuccess(route.modelDbId);
         setStickyModel(messages, route.modelDbId);
@@ -438,7 +437,7 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
         if (attempt > 0) res.setHeader('X-Fallback-Attempts', String(attempt));
         res.json(result);
 
-        logRequest(
+        await logRequest(
           route.platform, route.modelId, route.keyId, 'success',
           result.usage?.prompt_tokens ?? 0,
           result.usage?.completion_tokens ?? 0,
@@ -448,16 +447,16 @@ proxyRouter.post('/chat/completions', async (req: Request, res: Response) => {
       }
     } catch (err: any) {
       const latency = Date.now() - start;
-      logRequest(route.platform, route.modelId, route.keyId, 'error', estimatedInputTokens, 0, latency, err.message);
+      await logRequest(route.platform, route.modelId, route.keyId, 'error', estimatedInputTokens, 0, latency, err.message);
 
       // Refund the reserved tokens on failure so the rate limit isn't artificially depleted
-      recordTokens(route.platform, route.modelId, route.keyId, -estimatedTotal);
+      await recordTokens(route.platform, route.modelId, route.keyId, -estimatedTotal);
 
       if (isRetryableError(err)) {
         // Put this model+key on cooldown and try the next one
         const skipId = `${route.platform}:${route.modelId}:${route.keyId}`;
         skipKeys.add(skipId);
-        setCooldown(
+        await setCooldown(
           route.platform,
           route.modelId,
           route.keyId,
@@ -510,31 +509,31 @@ interface LogEntry {
 }
 const logBatch: LogEntry[] = [];
 
-export function flushLogBatch() {
+export async function flushLogBatch() {
   if (logBatch.length === 0) return;
   try {
     const db = getDb();
-    const insert = db.prepare(`
-      INSERT INTO requests (platform, model_id, key_id, status, input_tokens, output_tokens, latency_ms, error)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `);
     const entries = [...logBatch];
     logBatch.length = 0;
-    
-    db.transaction((items: LogEntry[]) => {
-      for (const e of items) {
-        insert.run(e.platform, e.modelId, e.keyId, e.status, e.inputTokens, e.outputTokens, e.latencyMs, e.error);
+    await db.transaction(async () => {
+      for (const e of entries) {
+        await db.run(`
+          INSERT INTO requests (platform, model_id, key_id, status, input_tokens, output_tokens, latency_ms, error)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `, [e.platform, e.modelId, e.keyId, e.status, e.inputTokens, e.outputTokens, e.latencyMs, e.error]);
       }
-    })(entries);
+    });
   } catch (err) {
     console.error('Failed to flush log batch:', err);
   }
 }
 
 // Flush every 2 seconds in the background
-setInterval(flushLogBatch, 2000).unref();
+setInterval(() => {
+  flushLogBatch().catch(err => console.error('Failed to flush log batch:', err));
+}, 2000).unref();
 
-function logRequest(
+async function logRequest(
   platform: string,
   modelId: string,
   keyId: number,
@@ -550,7 +549,10 @@ function logRequest(
     const now = Date.now();
     if (now - lastRequestPruneMs > REQUEST_PRUNE_INTERVAL_MS) {
       const db = getDb();
-      db.prepare(`DELETE FROM requests WHERE created_at < datetime('now', '-${REQUEST_RETENTION_DAYS} days')`).run();
+      await db.run(
+        "DELETE FROM requests WHERE created_at < CURRENT_TIMESTAMP - (? * INTERVAL '1 day')",
+        [REQUEST_RETENTION_DAYS],
+      );
       lastRequestPruneMs = now;
     }
   } catch (e) {

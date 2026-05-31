@@ -2,24 +2,24 @@ import { describe, it, expect } from 'vitest';
 import { contentToString, flattenMessageContent } from '../../lib/content.js';
 
 describe('contentToString', () => {
-  it('passes strings through', () => {
+  it('passes strings through', async () => {
     expect(contentToString('hello')).toBe('hello');
     expect(contentToString('')).toBe('');
   });
 
-  it('treats null and undefined as empty string', () => {
+  it('treats null and undefined as empty string', async () => {
     expect(contentToString(null)).toBe('');
     expect(contentToString(undefined)).toBe('');
   });
 
-  it('joins text blocks in OpenAI multimodal array envelope', () => {
+  it('joins text blocks in OpenAI multimodal array envelope', async () => {
     expect(contentToString([
       { type: 'text', text: 'hello ' },
       { type: 'text', text: 'world' },
     ])).toBe('hello world');
   });
 
-  it('drops non-text blocks silently (image_url etc.) — vision unsupported', () => {
+  it('drops non-text blocks silently (image_url etc.) — vision unsupported', async () => {
     expect(contentToString([
       { type: 'text', text: 'describe ' },
       { type: 'image_url', image_url: { url: 'https://example.com/x.png' } },
@@ -27,18 +27,18 @@ describe('contentToString', () => {
     ])).toBe('describe this');
   });
 
-  it('handles an array of bare strings (some clients send this)', () => {
+  it('handles an array of bare strings (some clients send this)', async () => {
     expect(contentToString(['foo', 'bar'])).toBe('foobar');
   });
 
-  it('returns empty string for unrecognized types instead of throwing', () => {
+  it('returns empty string for unrecognized types instead of throwing', async () => {
     expect(contentToString(42 as unknown)).toBe('');
     expect(contentToString({ unknown: true } as unknown)).toBe('');
   });
 });
 
 describe('flattenMessageContent', () => {
-  it('converts every message content to a string', () => {
+  it('converts every message content to a string', async () => {
     const out = flattenMessageContent([
       { role: 'user', content: 'plain' },
       { role: 'user', content: [{ type: 'text', text: 'array' }] },

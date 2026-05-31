@@ -1,24 +1,37 @@
 services:
+  postgres:
+    image: postgres:18
+    container_name: llmapif-postgres
+    environment:
+      POSTGRES_DB: llmapif
+      POSTGRES_USER: llmapif
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
+    volumes:
+      - llmapif-postgres:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U llmapif -d llmapif"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
   llmapif:
     build: .
     container_name: llmapif
+    depends_on:
+      postgres:
+        condition: service_healthy
     ports:
       - "3001:3001"
     volumes:
-      - llmapif-data:/data
-    environment:
-      - NODE_ENV=production
-      - PORT=3001
-      - DATABASE_PATH=/data/freeapi.db
-      # Required. Generate with:
-      #   node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
-      # Provide via a .env file next to this compose file, or your shell env.
-      - ENCRYPTION_KEY=${ENCRYPTION_KEY:?ENCRYPTION_KEY is required — generate a 64-char hex key}
-      # Required in Docker: the admin API is reachable over the published port,
-      # so it must be protected by a password (the server refuses to start
-      # otherwise). Choose a long passphrase.
-      - ADMIN_PASSWORD=${ADMIN_PASSWORD:?ADMIN_PASSWORD is required for Docker deployments}
+      - ./config/llmapif.json:/app/config/llmapif.json:ro
     restart: unless-stopped
 
 volumes:
-  llmapif-data:
+  llmapif-postgres:
+
+secrets:
+  postgres_password:
+    file: ./.secrets/postgres_password

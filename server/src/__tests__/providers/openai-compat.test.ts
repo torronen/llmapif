@@ -4,7 +4,7 @@ import { OpenAICompatProvider } from '../../providers/openai-compat.js';
 describe('OpenAICompatProvider', () => {
   let provider: OpenAICompatProvider;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     provider = new OpenAICompatProvider({
       platform: 'groq',
       name: 'TestProvider',
@@ -13,7 +13,7 @@ describe('OpenAICompatProvider', () => {
     });
   });
 
-  it('should set platform and name from config', () => {
+  it('should set platform and name from config', async () => {
     expect(provider.platform).toBe('groq');
     expect(provider.name).toBe('TestProvider');
   });

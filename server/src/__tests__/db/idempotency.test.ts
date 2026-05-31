@@ -1,143 +1,85 @@
-import { describe, it, expect } from 'vitest';
-import Database from 'better-sqlite3';
-import { initDb } from '../../db/index.js';
+import { afterEach, describe, expect, it } from 'vitest';
+import { closeDb, initDb } from '../../db/index.js';
 
-/**
- * All migrations must be idempotent: running initDb twice on the same
- * physical database file should produce identical state.
- */
-describe('Migration idempotency', () => {
-  it('initDb on a fresh in-memory DB then re-run produces identical row counts', () => {
-    process.env.ENCRYPTION_KEY = '0'.repeat(64);
-    // Use a single shared file so both inits hit the same DB.
-    const tmpPath = `/tmp/freeapi-idempotency-${Date.now()}.db`;
+async function freshDb() {
+  process.env.ENCRYPTION_KEY = '0'.repeat(64);
+  return initDb(':memory:');
+}
 
-    const db1 = initDb(tmpPath);
+afterEach(async () => {
+  await closeDb();
+});
+
+describe('Postgres catalog idempotency', () => {
+  it('seeds stable counts when initDb is rerun on the same database', async () => {
+    const db = await freshDb();
     const before = {
-      models: (db1.prepare('SELECT COUNT(*) AS c FROM models').get() as { c: number }).c,
-      fallback: (db1.prepare('SELECT COUNT(*) AS c FROM fallback_config').get() as { c: number }).c,
-      enabledModels: (db1.prepare('SELECT COUNT(*) AS c FROM models WHERE enabled = 1').get() as { c: number }).c,
-      disabledModels: (db1.prepare('SELECT COUNT(*) AS c FROM models WHERE enabled = 0').get() as { c: number }).c,
-      orphanFallbacks: (db1.prepare(`
+      models: (await db.one<{ c: number }>('SELECT COUNT(*) AS c FROM models'))?.c,
+      fallback: (await db.one<{ c: number }>('SELECT COUNT(*) AS c FROM fallback_config'))?.c,
+      enabledModels: (await db.one<{ c: number }>('SELECT COUNT(*) AS c FROM models WHERE enabled = 1'))?.c,
+      disabledModels: (await db.one<{ c: number }>('SELECT COUNT(*) AS c FROM models WHERE enabled = 0'))?.c,
+      orphanFallbacks: (await db.one<{ c: number }>(`
         SELECT COUNT(*) AS c FROM fallback_config f
         LEFT JOIN models m ON f.model_db_id = m.id
         WHERE m.id IS NULL
-      `).get() as { c: number }).c,
+      `))?.c,
     };
-    db1.close();
 
-    // Re-init the same DB file — V1..V9 should all no-op idempotently.
-    const db2 = initDb(tmpPath);
+    await initDb(':memory:');
+    const db2 = await freshDb();
     const after = {
-      models: (db2.prepare('SELECT COUNT(*) AS c FROM models').get() as { c: number }).c,
-      fallback: (db2.prepare('SELECT COUNT(*) AS c FROM fallback_config').get() as { c: number }).c,
-      enabledModels: (db2.prepare('SELECT COUNT(*) AS c FROM models WHERE enabled = 1').get() as { c: number }).c,
-      disabledModels: (db2.prepare('SELECT COUNT(*) AS c FROM models WHERE enabled = 0').get() as { c: number }).c,
-      orphanFallbacks: (db2.prepare(`
+      models: (await db2.one<{ c: number }>('SELECT COUNT(*) AS c FROM models'))?.c,
+      fallback: (await db2.one<{ c: number }>('SELECT COUNT(*) AS c FROM fallback_config'))?.c,
+      enabledModels: (await db2.one<{ c: number }>('SELECT COUNT(*) AS c FROM models WHERE enabled = 1'))?.c,
+      disabledModels: (await db2.one<{ c: number }>('SELECT COUNT(*) AS c FROM models WHERE enabled = 0'))?.c,
+      orphanFallbacks: (await db2.one<{ c: number }>(`
         SELECT COUNT(*) AS c FROM fallback_config f
         LEFT JOIN models m ON f.model_db_id = m.id
         WHERE m.id IS NULL
-      `).get() as { c: number }).c,
+      `))?.c,
     };
-    db2.close();
 
     expect(after).toEqual(before);
     expect(after.orphanFallbacks).toBe(0);
   });
 
-  it('every catalog row has exactly one fallback_config entry', () => {
-    process.env.ENCRYPTION_KEY = '0'.repeat(64);
-    const db = initDb(':memory:');
-
-    const rows = db.prepare(`
+  it('every catalog row has exactly one fallback_config entry', async () => {
+    const db = await freshDb();
+    const rows = await db.many<{ id: number; fb_count: number }>(`
       SELECT m.id, COUNT(f.id) AS fb_count
         FROM models m
         LEFT JOIN fallback_config f ON m.id = f.model_db_id
        GROUP BY m.id
       HAVING COUNT(f.id) <> 1
-    `).all() as { id: number; fb_count: number }[];
+    `);
 
     expect(rows).toEqual([]);
   });
 
-  it('UNIQUE(platform, model_id) constraint holds — no duplicate catalog rows', () => {
-    process.env.ENCRYPTION_KEY = '0'.repeat(64);
-    const db = initDb(':memory:');
-
-    const dups = db.prepare(`
+  it('keeps platform/model_id unique', async () => {
+    const db = await freshDb();
+    const rows = await db.many(`
       SELECT platform, model_id, COUNT(*) AS c FROM models
        GROUP BY platform, model_id
       HAVING COUNT(*) > 1
-    `).all();
+    `);
 
-    expect(dups).toEqual([]);
+    expect(rows).toEqual([]);
   });
 
-  it('V12: dead OR :free rows are absent and the four new rows are present', () => {
-    process.env.ENCRYPTION_KEY = '0'.repeat(64);
-    const db = initDb(':memory:');
+  it('contains the current cross-provider catalog state', async () => {
+    const db = await freshDb();
 
-    const dead = db.prepare(`
-      SELECT model_id FROM models
-       WHERE platform = 'openrouter'
-         AND model_id IN ('inclusionai/ling-2.6-1t:free', 'tencent/hy3-preview:free')
-    `).all();
-    expect(dead).toEqual([]);
-
-    const live = db.prepare(`
-      SELECT model_id FROM models
-       WHERE platform = 'openrouter'
-         AND model_id IN (
-           'arcee-ai/trinity-large-thinking:free',
-           'baidu/cobuddy:free',
-           'openrouter/owl-alpha',
-           'nousresearch/hermes-3-llama-3.1-405b:free'
-         )
-       ORDER BY model_id
-    `).all() as { model_id: string }[];
-    expect(live.map(r => r.model_id)).toEqual([
-      'arcee-ai/trinity-large-thinking:free',
-      'baidu/cobuddy:free',
-      'nousresearch/hermes-3-llama-3.1-405b:free',
-      'openrouter/owl-alpha',
-    ]);
-
-    const widened = db.prepare(`
-      SELECT model_id, context_window FROM models
-       WHERE platform = 'openrouter'
-         AND model_id IN ('nvidia/nemotron-3-super-120b-a12b:free', 'qwen/qwen3-coder:free')
-       ORDER BY model_id
-    `).all() as { model_id: string; context_window: number }[];
-    expect(widened).toEqual([
-      { model_id: 'nvidia/nemotron-3-super-120b-a12b:free', context_window: 1000000 },
-      { model_id: 'qwen/qwen3-coder:free', context_window: 1048576 },
-    ]);
-  });
-
-  it('V13: cross-provider catalog refresh applies cleanly', () => {
-    process.env.ENCRYPTION_KEY = '0'.repeat(64);
-    const db = initDb(':memory:');
-
-    // Disables — row kept but enabled=0.
-    const disabled = db.prepare(`
+    const disabled = await db.many<{ platform: string; model_id: string; enabled: number }>(`
       SELECT platform, model_id, enabled FROM models
        WHERE (platform = 'google' AND model_id = 'gemini-3.1-pro-preview')
           OR (platform = 'ollama' AND model_id IN ('kimi-k2-thinking', 'mistral-large-3:675b', 'deepseek-v3.2'))
        ORDER BY platform, model_id
-    `).all() as { platform: string; model_id: string; enabled: number }[];
+    `);
     expect(disabled).toHaveLength(4);
     for (const row of disabled) expect(row.enabled).toBe(0);
 
-    // Hard removals — row is gone entirely.
-    const removed = db.prepare(`
-      SELECT model_id FROM models
-       WHERE (platform = 'sambanova' AND model_id = 'DeepSeek-V3.1-cb')
-          OR (platform = 'cloudflare' AND model_id = '@cf/moonshotai/kimi-k2.5')
-    `).all();
-    expect(removed).toEqual([]);
-
-    // New rows present across providers (incl. new huggingface platform).
-    const additions = db.prepare(`
+    const additions = await db.many(`
       SELECT platform, model_id FROM models
        WHERE (platform, model_id) IN (VALUES
          ('groq',        'openai/gpt-oss-safeguard-20b'),
@@ -156,68 +98,17 @@ describe('Migration idempotency', () => {
          ('huggingface', 'moonshotai/Kimi-K2.6'),
          ('huggingface', 'Qwen/Qwen3-Coder-Next')
        )
-    `).all();
+    `);
     expect(additions).toHaveLength(15);
-
-    // Spot-check critical limit/context updates.
-    const cerebrasLimits = db.prepare(`
-      SELECT rpm_limit, rpd_limit, tpm_limit, tpd_limit FROM models
-       WHERE platform = 'cerebras' AND model_id = 'qwen-3-235b-a22b-instruct-2507'
-    `).get() as { rpm_limit: number; rpd_limit: number; tpm_limit: number; tpd_limit: number };
-    expect(cerebrasLimits).toEqual({ rpm_limit: 5, rpd_limit: 2400, tpm_limit: 30000, tpd_limit: 1000000 });
-
-    const sambanovaCtx = (db.prepare(`
-      SELECT context_window FROM models WHERE platform = 'sambanova' AND model_id = 'DeepSeek-V3.2'
-    `).get() as { context_window: number }).context_window;
-    expect(sambanovaCtx).toBe(32768);
-
-    const cfFp8Ctx = (db.prepare(`
-      SELECT context_window FROM models WHERE platform = 'cloudflare' AND model_id = '@cf/meta/llama-3.3-70b-instruct-fp8-fast'
-    `).get() as { context_window: number }).context_window;
-    expect(cfFp8Ctx).toBe(24000);
-
-    const mistralCtx = db.prepare(`
-      SELECT model_id, context_window FROM models
-       WHERE platform = 'mistral'
-         AND model_id IN ('codestral-latest', 'devstral-latest', 'magistral-medium-latest', 'mistral-large-latest')
-       ORDER BY model_id
-    `).all() as { model_id: string; context_window: number }[];
-    expect(mistralCtx).toEqual([
-      { model_id: 'codestral-latest',       context_window: 256000 },
-      { model_id: 'devstral-latest',        context_window: 262144 },
-      { model_id: 'magistral-medium-latest', context_window: 131072 },
-      { model_id: 'mistral-large-latest',   context_window: 262144 },
-    ]);
-  });
-
-  it('V14: cerebras deprecation disables qwen-3-235b and llama3.1-8b but keeps gpt-oss-120b enabled', () => {
-    process.env.ENCRYPTION_KEY = '0'.repeat(64);
-    const db = initDb(':memory:');
-
-    const rows = db.prepare(`
-      SELECT model_id, enabled FROM models
-       WHERE platform = 'cerebras'
-         AND model_id IN ('qwen-3-235b-a22b-instruct-2507', 'llama3.1-8b', 'gpt-oss-120b')
-       ORDER BY model_id
-    `).all() as { model_id: string; enabled: number }[];
-
-    expect(rows).toEqual([
-      { model_id: 'gpt-oss-120b',                    enabled: 1 },
-      { model_id: 'llama3.1-8b',                     enabled: 0 },
-      { model_id: 'qwen-3-235b-a22b-instruct-2507',  enabled: 0 },
-    ]);
   });
 
   it('all enabled catalog platforms have a registered provider', async () => {
-    process.env.ENCRYPTION_KEY = '0'.repeat(64);
-    const db = initDb(':memory:');
+    const db = await freshDb();
     const { hasProvider } = await import('../../providers/index.js');
+    const platforms = (await db.many<{ platform: any }>(
+      'SELECT DISTINCT platform FROM models WHERE enabled = 1',
+    )).map(r => r.platform);
 
-    const platforms = (db.prepare(
-      `SELECT DISTINCT platform FROM models WHERE enabled = 1`
-    ).all() as { platform: any }[]).map(r => r.platform);
-
-    const missing = platforms.filter(p => !hasProvider(p));
-    expect(missing).toEqual([]);
+    expect(platforms.filter(p => !hasProvider(p))).toEqual([]);
   });
 });

@@ -22,9 +22,9 @@ const addKeySchema = z.object({
 });
 
 // List all keys (masked)
-keysRouter.get('/', (_req: Request, res: Response) => {
+keysRouter.get('/', async (_req: Request, res: Response) => {
   const db = getDb();
-  const rows = db.prepare('SELECT * FROM api_keys ORDER BY created_at DESC').all() as any[];
+  const rows = await db.many('SELECT * FROM api_keys ORDER BY created_at DESC');
 
   const keys = rows.map(row => {
     let maskedKey = '****';
@@ -50,7 +50,7 @@ keysRouter.get('/', (_req: Request, res: Response) => {
 });
 
 // Add a key
-keysRouter.post('/', (req: Request, res: Response) => {
+keysRouter.post('/', async (req: Request, res: Response) => {
   const parsed = addKeySchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: { message: parsed.error.errors.map(e => e.message).join(', ') } });
@@ -61,13 +61,14 @@ keysRouter.post('/', (req: Request, res: Response) => {
   const { encrypted, iv, authTag } = encrypt(key);
 
   const db = getDb();
-  const result = db.prepare(`
+  const result = await db.one<{ id: number }>(`
     INSERT INTO api_keys (platform, label, encrypted_key, iv, auth_tag, status, enabled)
     VALUES (?, ?, ?, ?, ?, 'unknown', 1)
-  `).run(platform, label ?? '', encrypted, iv, authTag);
+    RETURNING id
+  `, [platform, label ?? '', encrypted, iv, authTag]);
 
   res.status(201).json({
-    id: result.lastInsertRowid,
+    id: result?.id,
     platform,
     label: label ?? '',
     maskedKey: maskKey(key),
@@ -77,7 +78,7 @@ keysRouter.post('/', (req: Request, res: Response) => {
 });
 
 // Delete a key
-keysRouter.delete('/:id', (req: Request, res: Response) => {
+keysRouter.delete('/:id', async (req: Request, res: Response) => {
   const id = parseInt(req.params.id as string, 10);
   if (isNaN(id)) {
     res.status(400).json({ error: { message: 'Invalid key ID' } });
@@ -85,7 +86,7 @@ keysRouter.delete('/:id', (req: Request, res: Response) => {
   }
 
   const db = getDb();
-  const result = db.prepare('DELETE FROM api_keys WHERE id = ?').run(id);
+  const result = await db.run('DELETE FROM api_keys WHERE id = ?', [id]);
 
   if (result.changes === 0) {
     res.status(404).json({ error: { message: 'Key not found' } });
@@ -96,7 +97,7 @@ keysRouter.delete('/:id', (req: Request, res: Response) => {
 });
 
 // Toggle all keys for a platform
-keysRouter.patch('/platform/:platform', (req: Request, res: Response) => {
+keysRouter.patch('/platform/:platform', async (req: Request, res: Response) => {
   const platform = req.params.platform as string;
   if (!(PLATFORMS as readonly string[]).includes(platform)) {
     res.status(400).json({ error: { message: `Invalid platform '${platform}'` } });
@@ -110,13 +111,13 @@ keysRouter.patch('/platform/:platform', (req: Request, res: Response) => {
   }
 
   const db = getDb();
-  const result = db.prepare('UPDATE api_keys SET enabled = ? WHERE platform = ?').run(enabled ? 1 : 0, platform);
+  const result = await db.run('UPDATE api_keys SET enabled = ? WHERE platform = ?', [enabled ? 1 : 0, platform]);
 
   res.json({ success: true, enabled, updatedKeys: result.changes });
 });
 
 // Toggle enable/disable
-keysRouter.patch('/:id', (req: Request, res: Response) => {
+keysRouter.patch('/:id', async (req: Request, res: Response) => {
   const id = parseInt(req.params.id as string, 10);
   if (isNaN(id)) {
     res.status(400).json({ error: { message: 'Invalid key ID' } });
@@ -130,7 +131,7 @@ keysRouter.patch('/:id', (req: Request, res: Response) => {
   }
 
   const db = getDb();
-  const result = db.prepare('UPDATE api_keys SET enabled = ? WHERE id = ?').run(enabled ? 1 : 0, id);
+  const result = await db.run('UPDATE api_keys SET enabled = ? WHERE id = ?', [enabled ? 1 : 0, id]);
 
   if (result.changes === 0) {
     res.status(404).json({ error: { message: 'Key not found' } });

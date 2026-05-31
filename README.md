@@ -132,13 +132,17 @@ To expose the admin API beyond loopback you must set a password: `ADMIN_ALLOW_RE
 ### Docker
 
 ```bash
-# Generate an encryption key and a strong admin password, then:
-ENCRYPTION_KEY=$(node -e "console.log(require('crypto').randomBytes(32).toString('hex'))") \
-ADMIN_PASSWORD='choose-a-long-passphrase' \
+# Generate root/local-only config first:
+mkdir -p config .secrets
+cp config/llmapif.example.json config/llmapif.json
+openssl rand -base64 36 > .secrets/postgres_password
+$EDITOR config/llmapif.json
 docker compose up --build
 ```
 
-The image binds to `0.0.0.0` and enables remote admin access, so `ADMIN_PASSWORD` (and `ENCRYPTION_KEY`) are mandatory — compose refuses to start without them. The SQLite database persists in the `llmapif-data` volume (`DATABASE_PATH=/data/freeapi.db`).
+The image reads `/app/config/llmapif.json` at startup. Keep that file and
+`.secrets/postgres_password` outside git. The runtime database is Postgres;
+there is no SQLite fallback.
 
 ## Using the API
 
@@ -274,11 +278,11 @@ Request volume, success rate, tokens in and out, average latency, and per-provid
 ```
 
 - **Router** (`server/src/services/router.ts`) — picks a model per request.
-- **Rate-limit ledger** (`server/src/services/ratelimit.ts`) — in-memory RPM/RPD/TPM/TPD counters backed by SQLite, with cooldowns on 429s.
+- **Rate-limit ledger** (`server/src/services/ratelimit.ts`) — in-memory RPM/RPD/TPM/TPD counters backed by Postgres, with cooldowns on 429s.
 - **Provider adapters** (`server/src/providers/*.ts`) — one file per provider, implementing the `Provider` base class: `chatCompletion()` and `streamChatCompletion()`.
 - **Health service** (`server/src/services/health.ts`) — periodic probe keeps key status fresh.
 - **Dashboard** (`client/`) — React + Vite + shadcn/ui admin surface.
-- **Storage** — SQLite (`better-sqlite3`) with AES-256-GCM envelope encryption for keys.
+- **Storage** — Postgres with AES-256-GCM envelope encryption for provider keys.
 
 ## Limitations
 

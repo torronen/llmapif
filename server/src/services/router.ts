@@ -145,20 +145,20 @@ function parseBudget(budget: any): number {
  * @param preferredModelDbId - try this model first (sticky session)
  * @param strategy - routing strategy for this request (smart, fast, cheap)
  */
-export function routeRequest(
+export async function routeRequest(
   estimatedTokens = 1000,
   skipKeys?: Set<string>,
   preferredModelDbId?: number,
   strategy: 'default' | 'smart' | 'fast' | 'cheap' = 'default'
-): RouteResult {
+): Promise<RouteResult> {
   const db = getDb();
 
   // Get fallback chain and model metadata
-  const fallbackChain = db.prepare(`
+  const fallbackChain = await db.many<FallbackRow & { intelligence_rank: number, speed_rank: number, monthly_token_budget: any }>(`
     SELECT fc.model_db_id, fc.priority, fc.enabled, m.intelligence_rank, m.speed_rank, m.monthly_token_budget
     FROM fallback_config fc
     JOIN models m ON fc.model_db_id = m.id
-  `).all() as (FallbackRow & { intelligence_rank: number, speed_rank: number, monthly_token_budget: any })[];
+  `);
 
   // Assign base priority based on strategy
   let ordered = fallbackChain.slice();
@@ -196,7 +196,7 @@ export function routeRequest(
     if (!entry.enabled) continue;
 
     // Get model details
-    const model = db.prepare('SELECT * FROM models WHERE id = ? AND enabled = 1').get(entry.model_db_id) as ModelRow | undefined;
+    const model = await db.one<ModelRow>('SELECT * FROM models WHERE id = ? AND enabled = 1', [entry.model_db_id]);
     if (!model) continue;
 
     // Check if we have a provider for this platform
@@ -204,9 +204,9 @@ export function routeRequest(
     if (!provider) continue;
 
     // Get enabled keys that have not already failed validation or decryption.
-    const keys = db.prepare(
+    const keys = await db.many<KeyRow>(
       "SELECT * FROM api_keys WHERE platform = ? AND enabled = 1 AND status IN ('healthy', 'unknown')"
-    ).all(model.platform) as KeyRow[];
+    , [model.platform]);
 
     if (keys.length === 0) continue;
 
@@ -230,17 +230,16 @@ export function routeRequest(
       if (skipKeys?.has(skipId)) continue;
 
       // Check cooldown (from previous 429s)
-      if (isOnCooldown(model.platform, model.model_id, key.id)) continue;
+      if (await isOnCooldown(model.platform, model.model_id, key.id)) continue;
 
-      if (!canMakeRequest(model.platform, model.model_id, key.id, limits)) continue;
-      if (!canUseTokens(model.platform, model.model_id, key.id, estimatedTokens, limits)) continue;
+      if (!await canMakeRequest(model.platform, model.model_id, key.id, limits)) continue;
+      if (!await canUseTokens(model.platform, model.model_id, key.id, estimatedTokens, limits)) continue;
 
       let decryptedKey: string;
       try {
         decryptedKey = decrypt(key.encrypted_key, key.iv, key.auth_tag);
       } catch {
-        db.prepare("UPDATE api_keys SET status = 'error', last_checked_at = datetime('now') WHERE id = ?")
-          .run(key.id);
+        await db.run("UPDATE api_keys SET status = 'error', last_checked_at = CURRENT_TIMESTAMP WHERE id = ?", [key.id]);
         continue;
       }
 

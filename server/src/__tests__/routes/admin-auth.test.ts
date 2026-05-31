@@ -24,9 +24,9 @@ describe('Admin authentication', () => {
   let server: Server;
   const original = process.env.ADMIN_PASSWORD;
 
-  beforeAll(() => {
+  beforeAll(async () => {
     process.env.ENCRYPTION_KEY = '0'.repeat(64);
-    initDb(':memory:');
+    await initDb(':memory:');
     app = createApp();
     server = app.listen(0);
     baseUrl = `http://127.0.0.1:${(server.address() as any).port}`;
@@ -34,12 +34,12 @@ describe('Admin authentication', () => {
 
   afterAll(() => new Promise<void>((resolve) => server.close(() => resolve())));
 
-  beforeEach(() => {
+  beforeEach(async () => {
     // Isolate the in-memory login-rate-limit counter between tests.
     clearAllLoginAttempts();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     if (original === undefined) delete process.env.ADMIN_PASSWORD;
     else process.env.ADMIN_PASSWORD = original;
   });

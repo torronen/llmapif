@@ -3,19 +3,19 @@ import { initDb } from '../../db/index.js';
 import { encrypt, decrypt, maskKey } from '../../lib/crypto.js';
 
 describe('Crypto', () => {
-  beforeAll(() => {
+  beforeAll(async () => {
     process.env.ENCRYPTION_KEY = '0'.repeat(64);
-    initDb(':memory:');
+    await initDb(':memory:');
   });
 
-  it('should encrypt and decrypt a key round-trip', () => {
+  it('should encrypt and decrypt a key round-trip', async () => {
     const original = 'gsk_test1234567890abcdef';
     const { encrypted, iv, authTag } = encrypt(original);
     const decrypted = decrypt(encrypted, iv, authTag);
     expect(decrypted).toBe(original);
   });
 
-  it('should produce different ciphertext for same input (random IV)', () => {
+  it('should produce different ciphertext for same input (random IV)', async () => {
     const original = 'same-key';
     const a = encrypt(original);
     const b = encrypt(original);
@@ -23,22 +23,22 @@ describe('Crypto', () => {
     expect(a.iv).not.toBe(b.iv);
   });
 
-  it('should fail to decrypt with wrong auth tag', () => {
+  it('should fail to decrypt with wrong auth tag', async () => {
     const { encrypted, iv } = encrypt('test-key');
     expect(() => decrypt(encrypted, iv, 'a'.repeat(32))).toThrow();
   });
 
   describe('maskKey', () => {
-    it('should mask long keys', () => {
+    it('should mask long keys', async () => {
       expect(maskKey('gsk_test1234567890abcdef')).toBe('gsk_...cdef');
     });
 
-    it('should fully mask very short keys (<= 4 chars)', () => {
+    it('should fully mask very short keys (<= 4 chars)', async () => {
       // A 4-char key is short enough that revealing any of it leaks too much.
       expect(maskKey('abcd')).toBe('****');
     });
 
-    it('should reveal only the last 2 chars of short keys (5-8 chars)', () => {
+    it('should reveal only the last 2 chars of short keys (5-8 chars)', async () => {
       expect(maskKey('abcdef')).toBe('****ef');
     });
   });

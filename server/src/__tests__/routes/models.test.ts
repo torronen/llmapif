@@ -26,16 +26,16 @@ describe('Models API', () => {
   let server: Server;
   let adminToken: string;
 
-  beforeAll(() => {
+  beforeAll(async () => {
     process.env.DEV_MODE = 'true';
-    initDb(':memory:');
+    await initDb(':memory:');
     app = createApp();
     process.env.ADMIN_PASSWORD = 'test-password';
     server = app.listen(0);
     baseUrl = `http://127.0.0.1:${(server.address() as any).port}`;
   });
 
-  afterAll(() => {
+  afterAll(async () => {
     delete process.env.ADMIN_PASSWORD;
     return new Promise<void>((resolve) => server.close(() => resolve()));
   });

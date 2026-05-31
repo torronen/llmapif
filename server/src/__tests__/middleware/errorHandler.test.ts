@@ -3,7 +3,7 @@ import { errorHandler } from '../../middleware/errorHandler.js';
 import type { Request, Response, NextFunction } from 'express';
 
 describe('Error Handler Middleware', () => {
-  it('should delegate to next if headers are already sent', () => {
+  it('should delegate to next if headers are already sent', async () => {
     const err = new Error('Test error');
     const req = {} as Request;
     const res = { headersSent: true } as Response;
@@ -17,7 +17,7 @@ describe('Error Handler Middleware', () => {
     consoleSpy.mockRestore();
   });
 
-  it('should handle 4xx client errors and return message', () => {
+  it('should handle 4xx client errors and return message', async () => {
     const err: any = new Error('Client error message');
     err.status = 400;
     err.name = 'ValidationError';
@@ -44,7 +44,7 @@ describe('Error Handler Middleware', () => {
     consoleSpy.mockRestore();
   });
 
-  it('should hide 5xx server error messages', () => {
+  it('should hide 5xx server error messages', async () => {
     const err: any = new Error('Secret DB connection error');
     err.status = 500;
     
@@ -70,7 +70,7 @@ describe('Error Handler Middleware', () => {
     consoleSpy.mockRestore();
   });
 
-  it('should default to 500 if no status is set', () => {
+  it('should default to 500 if no status is set', async () => {
     const err: any = new Error('No status error');
     
     const req = {} as Request;

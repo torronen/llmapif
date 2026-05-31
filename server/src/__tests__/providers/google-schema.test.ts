@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { sanitizeForGemini } from '../../providers/google.js';
 
 describe('sanitizeForGemini', () => {
-  it('strips top-level JSON-Schema-only fields that Google rejects', () => {
+  it('strips top-level JSON-Schema-only fields that Google rejects', async () => {
     const input = {
       $schema: 'https://json-schema.org/draft/2020-12/schema',
       $id: 'http://example.com/foo.json',
@@ -15,7 +15,7 @@ describe('sanitizeForGemini', () => {
     });
   });
 
-  it('strips exclusiveMinimum / exclusiveMaximum recursively in nested properties', () => {
+  it('strips exclusiveMinimum / exclusiveMaximum recursively in nested properties', async () => {
     const input = {
       type: 'object',
       properties: {
@@ -42,7 +42,7 @@ describe('sanitizeForGemini', () => {
     });
   });
 
-  it('walks through arrays (e.g. anyOf branches)', () => {
+  it('walks through arrays (e.g. anyOf branches)', async () => {
     const input = {
       anyOf: [
         { type: 'string', $ref: '#/definitions/foo' },
@@ -57,7 +57,7 @@ describe('sanitizeForGemini', () => {
     });
   });
 
-  it('removes $defs / definitions / patternProperties / if-then-else', () => {
+  it('removes $defs / definitions / patternProperties / if-then-else', async () => {
     const input = {
       type: 'object',
       $defs: { Foo: { type: 'string' } },
@@ -74,7 +74,7 @@ describe('sanitizeForGemini', () => {
     });
   });
 
-  it('passes through supported OpenAPI fields untouched', () => {
+  it('passes through supported OpenAPI fields untouched', async () => {
     const input = {
       type: 'object',
       description: 'A tool input',
@@ -87,7 +87,7 @@ describe('sanitizeForGemini', () => {
     expect(sanitizeForGemini(input)).toEqual(input);
   });
 
-  it('strips additionalProperties (Gemini rejects it with 400)', () => {
+  it('strips additionalProperties (Gemini rejects it with 400)', async () => {
     const input = {
       type: 'object',
       properties: {
@@ -112,7 +112,7 @@ describe('sanitizeForGemini', () => {
     });
   });
 
-  it('handles primitives and null safely', () => {
+  it('handles primitives and null safely', async () => {
     expect(sanitizeForGemini(null)).toBe(null);
     expect(sanitizeForGemini(undefined)).toBe(undefined);
     expect(sanitizeForGemini('hello')).toBe('hello');

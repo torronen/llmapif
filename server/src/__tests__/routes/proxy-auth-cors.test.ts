@@ -25,9 +25,9 @@ describe('Proxy authentication and CORS', () => {
   let app: Express;
   let server: Server;
 
-  beforeAll(() => {
+  beforeAll(async () => {
     process.env.ENCRYPTION_KEY = '0'.repeat(64);
-    initDb(':memory:');
+    await initDb(':memory:');
     app = createApp();
     server = app.listen(0);
     baseUrl = `http://127.0.0.1:${(server.address() as any).port}`;

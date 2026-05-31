@@ -11,7 +11,7 @@ const failureCount = new Map<number, number>();
 
 export async function checkKeyHealth(keyId: number): Promise<KeyStatus> {
   const db = getDb();
-  const row = db.prepare('SELECT * FROM api_keys WHERE id = ?').get(keyId) as any;
+  const row = await db.one<any>('SELECT * FROM api_keys WHERE id = ?', [keyId]);
   if (!row) return 'error';
 
   const provider = getProvider(row.platform as Platform);
@@ -23,8 +23,7 @@ export async function checkKeyHealth(keyId: number): Promise<KeyStatus> {
 
     const status: KeyStatus = isValid ? 'healthy' : 'invalid';
 
-    db.prepare("UPDATE api_keys SET status = ?, last_checked_at = datetime('now') WHERE id = ?")
-      .run(status, keyId);
+    await db.run("UPDATE api_keys SET status = ?, last_checked_at = CURRENT_TIMESTAMP WHERE id = ?", [status, keyId]);
 
     if (isValid) {
       failureCount.delete(keyId);
@@ -33,7 +32,7 @@ export async function checkKeyHealth(keyId: number): Promise<KeyStatus> {
       failureCount.set(keyId, count);
 
       if (count >= CONSECUTIVE_FAILURES_TO_DISABLE) {
-        db.prepare('UPDATE api_keys SET enabled = 0 WHERE id = ?').run(keyId);
+        await db.run('UPDATE api_keys SET enabled = 0 WHERE id = ?', [keyId]);
         console.log(`[Health] Auto-disabled key ${keyId} after ${count} consecutive failures`);
       }
     }
@@ -44,15 +43,14 @@ export async function checkKeyHealth(keyId: number): Promise<KeyStatus> {
     // a bad key. Mark status='error' but do NOT increment failure counter — auto-
     // disable is reserved for confirmed 401/403 (returned by validateKey as false).
     console.error(`[Health] Key ${keyId} transport error:`, err.message);
-    db.prepare("UPDATE api_keys SET status = ?, last_checked_at = datetime('now') WHERE id = ?")
-      .run('error', keyId);
+    await db.run("UPDATE api_keys SET status = ?, last_checked_at = CURRENT_TIMESTAMP WHERE id = ?", ['error', keyId]);
     return 'error';
   }
 }
 
 export async function checkAllKeys(): Promise<void> {
   const db = getDb();
-  const keys = db.prepare('SELECT id, platform FROM api_keys WHERE enabled = 1').all() as { id: number; platform: string }[];
+  const keys = await db.many<{ id: number; platform: string }>('SELECT id, platform FROM api_keys WHERE enabled = 1');
 
   console.log(`[Health] Checking ${keys.length} keys...`);
 

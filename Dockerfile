@@ -1,7 +1,4 @@
 # Stage 1: Build
-# Debian (glibc) base rather than Alpine (musl): the better-sqlite3 native
-# addon ships prebuilt glibc binaries, so this avoids the musl "Exec format
-# error" you get when an incompatible prebuilt binary is pulled on Alpine.
 FROM node:22-bookworm-slim AS builder
 
 WORKDIR /app
@@ -37,22 +34,10 @@ COPY --from=builder /app/server/package.json ./server/
 COPY --from=builder /app/server/dist ./server/dist
 COPY --from=builder /app/client/dist ./client/dist
 
-# Create a data directory for the SQLite database
-RUN mkdir -p /data && chown -R node:node /data
+# Runtime configuration is loaded from /app/config/llmapif.json (or
+# /etc/llmapif/config.json) before the server starts. Do not bake database
+# URLs, provider keys, admin passwords or encryption keys into the image.
 
-# Set environment variables. The server binds to loopback by default; inside a
-# container it must bind to 0.0.0.0 to be reachable via the published port.
-# Because that exposes the admin API beyond loopback, ADMIN_ALLOW_REMOTE=true is
-# also set — which makes ADMIN_PASSWORD mandatory: the server refuses to start
-# without it (see assertRemoteAccessIsSafe). ENCRYPTION_KEY and ADMIN_PASSWORD
-# must be provided at runtime (e.g. via docker-compose env / `docker run -e`).
-ENV NODE_ENV=production
-ENV PORT=3001
-ENV DATABASE_PATH=/data/freeapi.db
-ENV BIND_HOST=0.0.0.0
-ENV ADMIN_ALLOW_REMOTE=true
-
-# Expose the port
 EXPOSE 3001
 
 # Run as non-root user

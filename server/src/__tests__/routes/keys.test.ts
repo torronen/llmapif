@@ -21,9 +21,9 @@ describe('Keys API', () => {
   let app: Express;
   let server: Server;
 
-  beforeAll(() => {
+  beforeAll(async () => {
     process.env.ENCRYPTION_KEY = '0'.repeat(64);
-    initDb(':memory:');
+    await initDb(':memory:');
     app = createApp();
     server = app.listen(0);
     baseUrl = `http://127.0.0.1:${(server.address() as any).port}`;
@@ -31,9 +31,9 @@ describe('Keys API', () => {
 
   afterAll(() => new Promise<void>((resolve) => server.close(() => resolve())));
 
-  beforeEach(() => {
+  beforeEach(async () => {
     const db = getDb();
-    db.prepare('DELETE FROM api_keys').run();
+    await db.prepare('DELETE FROM api_keys').run();
   });
 
   it('GET /api/keys returns empty array initially', async () => {
@@ -146,7 +146,7 @@ describe('Keys API', () => {
 
   it('should handle decrypt failure in listing', async () => {
     const db = getDb();
-    db.prepare(`
+    await db.prepare(`
       INSERT INTO api_keys (platform, label, encrypted_key, iv, auth_tag, status, enabled)
       VALUES ('openrouter', 'broken', 'bad_data', 'bad_iv', 'bad_tag', 'unknown', 1)
     `).run();

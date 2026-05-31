@@ -51,7 +51,7 @@ describe('Proxy logging batch', () => {
   it('flushLogBatch flushes logs to DB and clears batch', async () => {
     const db = getDb();
     const { encrypted, iv, authTag } = encrypt('test-key-2');
-    db.prepare(`
+    await db.prepare(`
       INSERT INTO api_keys (platform, label, encrypted_key, iv, auth_tag, status, enabled)
       VALUES (?, ?, ?, ?, ?, ?, ?)
     `).run('google', 'test', encrypted, iv, authTag, 'healthy', 1);
@@ -79,10 +79,10 @@ describe('Proxy logging batch', () => {
     expect(res.status).toBe(200);
 
     // Manually flush
-    flushLogBatch();
+    await flushLogBatch();
     
     // Check DB
-    const reqs = db.prepare('SELECT * FROM requests').all() as any[];
+    const reqs = await db.prepare('SELECT * FROM requests').all() as any[];
     expect(reqs.length).toBeGreaterThan(0);
   });
 });

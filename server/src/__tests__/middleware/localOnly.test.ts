@@ -16,8 +16,8 @@ function mockReqRes(remoteAddress: string | undefined) {
 
 describe('localOnly middleware', () => {
   const original = process.env.ADMIN_ALLOW_REMOTE;
-  beforeEach(() => { delete process.env.ADMIN_ALLOW_REMOTE; });
-  afterEach(() => {
+  beforeEach(async () => { delete process.env.ADMIN_ALLOW_REMOTE; });
+  afterEach(async () => {
     if (original === undefined) delete process.env.ADMIN_ALLOW_REMOTE;
     else process.env.ADMIN_ALLOW_REMOTE = original;
   });
@@ -43,7 +43,7 @@ describe('localOnly middleware', () => {
     },
   );
 
-  it('lets remote peers through when ADMIN_ALLOW_REMOTE=true', () => {
+  it('lets remote peers through when ADMIN_ALLOW_REMOTE=true', async () => {
     process.env.ADMIN_ALLOW_REMOTE = 'true';
     const { req, res, next } = mockReqRes('192.168.1.50');
     localOnly(req, res, next);

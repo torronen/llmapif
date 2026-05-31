@@ -4,11 +4,11 @@ import { GoogleProvider } from '../../providers/google.js';
 describe('GoogleProvider', () => {
   let provider: GoogleProvider;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     provider = new GoogleProvider();
   });
 
-  it('should have correct platform and name', () => {
+  it('should have correct platform and name', async () => {
     expect(provider.platform).toBe('google');
     expect(provider.name).toBe('Google AI Studio');
   });

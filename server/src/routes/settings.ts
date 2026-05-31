@@ -10,7 +10,7 @@ settingsRouter.get('/api-key', (_req: Request, res: Response) => {
 });
 
 // Regenerate the unified API key
-settingsRouter.post('/api-key/regenerate', (_req: Request, res: Response) => {
-  const newKey = regenerateUnifiedKey();
+settingsRouter.post('/api-key/regenerate', async (_req: Request, res: Response) => {
+  const newKey = await regenerateUnifiedKey();
   res.json({ apiKey: newKey });
 });
